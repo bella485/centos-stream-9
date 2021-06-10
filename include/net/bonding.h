@@ -347,6 +347,12 @@ static inline bool bond_uses_primary(struct bonding *bond)
 	return bond_mode_uses_primary(BOND_MODE(bond));
 }
 
+static inline bool bond_primary_rx_only(struct bonding *bond)
+{
+	int mode = BOND_MODE(bond);
+	return mode == BOND_MODE_ACTIVEBACKUP || mode == BOND_MODE_TLB;
+}
+
 static inline struct net_device *bond_option_active_slave_get_rcu(struct bonding *bond)
 {
 	struct slave *slave = rcu_dereference(bond->curr_active_slave);

@@ -781,7 +781,7 @@ static int bond_set_promiscuity(struct bonding *bond, int inc)
 	struct list_head *iter;
 	int err = 0;
 
-	if (bond_uses_primary(bond)) {
+	if (bond_primary_rx_only(bond)) {
 		struct slave *curr_active = rtnl_dereference(bond->curr_active_slave);
 
 		if (curr_active)
@@ -804,7 +804,7 @@ static int bond_set_allmulti(struct bonding *bond, int inc)
 	struct list_head *iter;
 	int err = 0;
 
-	if (bond_uses_primary(bond)) {
+	if (bond_primary_rx_only(bond)) {
 		struct slave *curr_active = rtnl_dereference(bond->curr_active_slave);
 
 		if (curr_active)
@@ -2099,7 +2099,7 @@ int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev,
 	/* If the mode uses primary, then the following is handled by
 	 * bond_change_active_slave().
 	 */
-	if (!bond_uses_primary(bond)) {
+	if (!bond_primary_rx_only(bond)) {
 		/* set promiscuity level to new slave */
 		if (bond_dev->flags & IFF_PROMISC) {
 			res = dev_set_promiscuity(slave_dev, 1);
@@ -2339,7 +2339,7 @@ static int __bond_release_one(struct net_device *bond_dev,
 	/* If the mode uses primary, then this case was handled above by
 	 * bond_change_active_slave(..., NULL)
 	 */
-	if (!bond_uses_primary(bond)) {
+	if (!bond_primary_rx_only(bond)) {
 		/* unset promiscuity level from slave
 		 * NOTE: The NETDEV_CHANGEADDR call above may change the value
 		 * of the IFF_PROMISC flag in the bond_dev, but we need the
@@ -4151,7 +4151,7 @@ static void bond_set_rx_mode(struct net_device *bond_dev)
 	struct slave *slave;
 
 	rcu_read_lock();
-	if (bond_uses_primary(bond)) {
+	if (bond_primary_rx_only(bond)) {
 		slave = rcu_dereference(bond->curr_active_slave);
 		if (slave) {
 			dev_uc_sync(slave->dev, bond_dev);
