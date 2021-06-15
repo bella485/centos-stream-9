@@ -119,6 +119,7 @@ static inline int is_netpoll_tx_blocked(struct net_device *dev)
 struct bond_params {
 	int mode;
 	int xmit_policy;
+	u32 xmit_hash_mask;
 	int miimon;
 	u8 num_peer_notif;
 	int arp_interval;

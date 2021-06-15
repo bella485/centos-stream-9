@@ -849,6 +849,21 @@ use_carrier
 	0 will use the deprecated MII / ETHTOOL ioctls.  The default
 	value is 1.
 
+hash_policy_mask
+
+	Specify which components should be used to generate the transmit
+	hash value when using the xmit_hash_policy=component setting.
+
+	0x0001 = source mac address
+	0x0002 = destination mac address
+	0x0004 = network protocol
+	0x0008 = vlan ID
+	0x0010 = source IP
+	0x0020 = destination IP
+	0x0040 = IP protocol
+	0x0080 = layer 4 ports (TCP/UDP) both source and dest
+	0x00FF-0xFFFF unassigned
+
 xmit_hash_policy
 
 	Selects the transmit hash policy to use for slave selection in
@@ -963,6 +978,13 @@ xmit_hash_policy
 		The formula for the hash is simply
 
 		hash = (vlan ID) XOR (source MAC vendor) XOR (source MAC dev)
+
+	custom
+
+		This policy creates a hash based on a bitmask of possible
+		fields. The hash_policy_mask module parameter controls which
+		fields are used to generate the hash. A hash is generated using
+		flow dissector's hashing algorithm.
 
 	The default value is layer2.  This option was added in bonding
 	version 2.6.3.  In earlier versions of bonding, this parameter

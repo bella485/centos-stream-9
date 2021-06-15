@@ -95,6 +95,17 @@
 #define BOND_XMIT_POLICY_ENCAP23	3 /* encapsulated layer 2+3 */
 #define BOND_XMIT_POLICY_ENCAP34	4 /* encapsulated layer 3+4 */
 #define BOND_XMIT_POLICY_VLAN_SRCMAC	5 /* vlan + source MAC */
+#define BOND_XMIT_POLICY_CUSTOM         6 /* user programmable hash policy */
+
+/* hashing policy fields */
+#define BOND_HASH_FLD_MAC_SRC         0x1
+#define BOND_HASH_FLD_MAC_DST         0x2
+#define BOND_HASH_FLD_N_PROTO         0x4  /* network protocol */
+#define BOND_HASH_FLD_VLAN_ID         0x8
+#define BOND_HASH_FLD_IP_SRC          0x10
+#define BOND_HASH_FLD_IP_DST          0x20
+#define BOND_HASH_FLD_IP_PROTO        0x40  /* IP protocol */
+#define BOND_HASH_FLD_PORTS           0x80
 
 /* 802.3ad port state definitions (43.4.2.2 in the 802.3ad standard) */
 #define LACP_STATE_LACP_ACTIVITY   0x1
