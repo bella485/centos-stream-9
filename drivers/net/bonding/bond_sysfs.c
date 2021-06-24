@@ -222,6 +222,24 @@ static ssize_t bonding_show_xmit_hash(struct device *d,
 static DEVICE_ATTR(xmit_hash_policy, 0644,
 		   bonding_show_xmit_hash, bonding_sysfs_store_option);
 
+/* Show the bonding transmit hash mask. */
+static ssize_t bonding_show_xmit_hash_mask(struct device *d,
+					   struct device_attribute *attr,
+					   char *buf)
+{
+	struct bonding *bond = to_bond(d);
+	const struct bond_opt_value *val;
+
+	val = bond_opt_get_val(BOND_OPT_XMIT_HASH_MASK,
+			       bond->params.xmit_hash_mask);
+
+	return sprintf(buf, "%s 0x%08x\n", val->string,
+		       bond->params.xmit_hash_mask);
+}
+static DEVICE_ATTR(xmit_hash_mask, 0644,
+		   bonding_show_xmit_hash_mask,
+		   bonding_sysfs_store_option);
+
 /* Show arp_validate. */
 static ssize_t bonding_show_arp_validate(struct device *d,
 					 struct device_attribute *attr,
@@ -741,6 +759,7 @@ static struct attribute *per_bond_attrs[] = {
 	&dev_attr_lacp_rate.attr,
 	&dev_attr_ad_select.attr,
 	&dev_attr_xmit_hash_policy.attr,
+	&dev_attr_xmit_hash_mask.attr,
 	&dev_attr_num_grat_arp.attr,
 	&dev_attr_num_unsol_na.attr,
 	&dev_attr_miimon.attr,
