@@ -1534,9 +1534,13 @@ struct slave *bond_xmit_alb_slave_get(struct bonding *bond,
 
 			slaves = rcu_dereference(bond->usable_slaves);
 			count = slaves ? READ_ONCE(slaves->count) : 0;
-			if (likely(count))
-				tx_slave = slaves->arr[bond_xmit_hash(bond, skb) %
-						       count];
+			if (likely(count)) {
+				u32 hash = bond_xmit_hash(bond, skb);
+				tx_slave = slaves->arr[hash % count];
+				slave_dbg(bond->dev, tx_slave->dev,
+					  "%s: got hash %u (count %d)\n",
+					  __func__, hash, count);
+			}
 		}
 	}
 	return tx_slave;
