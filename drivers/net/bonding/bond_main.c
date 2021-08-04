@@ -3764,8 +3764,10 @@ static u32 hash_policy_vlan_srcmac(struct bonding *bond, struct sk_buff *skb)
 	u32 hash = 0;
 	struct ethhdr *mac = (struct ethhdr *)skb_mac_header(skb);
 
+#if 0
 	if (skb_vlan_tag_present(skb))
 		hash = skb_vlan_tag_get(skb);
+#endif
 	hash ^= (u32)((mac->h_source[0] << 16) | (mac->h_source[1] << 8) |
 		(mac->h_source[2]));
 	hash ^= (u32)((mac->h_source[3] << 16) | (mac->h_source[4] << 8) |
