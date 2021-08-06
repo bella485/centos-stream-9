@@ -659,6 +659,7 @@ static struct slave *rlb_choose_channel(struct sk_buff *skb,
  */
 static struct slave *rlb_arp_xmit(struct sk_buff *skb, struct bonding *bond)
 {
+	struct ethhdr *eth_data = eth_hdr(skb);
 	struct slave *tx_slave = NULL;
 	struct arp_pkt *arp;
 
@@ -667,15 +668,16 @@ static struct slave *rlb_arp_xmit(struct sk_buff *skb, struct bonding *bond)
 	arp = (struct arp_pkt *)skb_network_header(skb);
 
 	/* Don't modify or load balance ARPs that do not originate locally
-	 * (e.g., arrive via a bridge).
+	 * (e.g., arrive via a bridge the bond isn't a direct member of).
 	 */
-	if (!bond_slave_has_mac_rx(bond, arp->mac_src))
+	if (!bond_slave_has_mac_rx(bond, arp->mac_src) &&
+	    !netif_is_bridge_port(bond->dev))
 		return NULL;
 
 	if (arp->op_code == htons(ARPOP_REPLY)) {
 		/* the arp must be sent on the selected rx channel */
 		tx_slave = rlb_choose_channel(skb, bond, arp);
-		if (tx_slave)
+		if (tx_slave && !bond_alb_bridged_mac(bond, eth_data))
 			bond_hw_addr_copy(arp->mac_src, tx_slave->dev->dev_addr,
 					  tx_slave->dev->addr_len);
 		netdev_dbg(bond->dev, "(slave %s): Server sent ARP Reply packet\n",
