@@ -3355,6 +3355,7 @@ static int io_read(struct io_kiocb *req, unsigned int issue_flags)
 		if (req->flags & REQ_F_NOWAIT)
 			goto done;
 		/* some cases will consume bytes even on error returns */
+		iov_iter_reexpand(iter, iter->count + iter->truncated);
 		iov_iter_revert(iter, io_size - iov_iter_count(iter));
 		ret = 0;
 	} else if (ret == -EIOCBQUEUED) {
@@ -3494,6 +3495,7 @@ done:
 	} else {
 copy_iov:
 		/* some cases will consume bytes even on error returns */
+		iov_iter_reexpand(iter, iter->count + iter->truncated);
 		iov_iter_revert(iter, io_size - iov_iter_count(iter));
 		ret = io_setup_async_rw(req, iovec, inline_vecs, iter, false);
 		return ret ?: -EAGAIN;
