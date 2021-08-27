@@ -30,7 +30,7 @@
 #include <net/pkt_cls.h>
 #include <net/tc_act/tc_gact.h>
 
-#define QEDE_MAJOR_VERSION		8
+#define QEDE_MAJOR_VERSION		9
 #define QEDE_MINOR_VERSION		37
 #define QEDE_REVISION_VERSION		0
 #define QEDE_ENGINEERING_VERSION	20
