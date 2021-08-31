@@ -3,7 +3,7 @@ VERSION = 5
 PATCHLEVEL = 14
 SUBLEVEL = 0
 EXTRAVERSION =
-NAME = Opossums on Parade
+NAME = Terrible twos
 
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"
