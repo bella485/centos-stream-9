@@ -422,10 +422,18 @@ static void rlb_clear_slave(struct bonding *bond, struct slave *slave)
 
 static void rlb_update_client(struct rlb_client_info *client_info)
 {
+	u8 mac_src[ETH_ALEN];
 	int i;
 
 	if (!client_info->slave || !is_valid_ether_addr(client_info->mac_dst))
 		return;
+
+	if (!bond_slave_has_mac_rx(client_info->slave->bond,
+				   client_info->mac_src) &&
+	    netif_is_bridge_port(client_info->slave->bond->dev))
+		ether_addr_copy(mac_src, client_info->mac_src);
+	else
+		ether_addr_copy(mac_src, client_info->slave->dev->dev_addr);
 
 	for (i = 0; i < RLB_ARP_BURST_SIZE; i++) {
 		struct sk_buff *skb;
@@ -435,7 +443,7 @@ static void rlb_update_client(struct rlb_client_info *client_info)
 				 client_info->slave->dev,
 				 client_info->ip_src,
 				 client_info->mac_dst,
-				 client_info->slave->dev->dev_addr,
+				 mac_src,
 				 client_info->mac_dst);
 		if (!skb) {
 			slave_err(client_info->slave->bond->dev,
@@ -651,6 +659,7 @@ static struct slave *rlb_choose_channel(struct sk_buff *skb,
  */
 static struct slave *rlb_arp_xmit(struct sk_buff *skb, struct bonding *bond)
 {
+	struct ethhdr *eth_data = eth_hdr(skb);
 	struct slave *tx_slave = NULL;
 	struct arp_pkt *arp;
 
@@ -659,15 +668,16 @@ static struct slave *rlb_arp_xmit(struct sk_buff *skb, struct bonding *bond)
 	arp = (struct arp_pkt *)skb_network_header(skb);
 
 	/* Don't modify or load balance ARPs that do not originate locally
-	 * (e.g.,arrive via a bridge).
+	 * (e.g., arrive via a bridge the bond isn't a direct member of).
 	 */
-	if (!bond_slave_has_mac_rx(bond, arp->mac_src))
+	if (!bond_slave_has_mac_rx(bond, arp->mac_src) &&
+	    !netif_is_bridge_port(bond->dev))
 		return NULL;
 
 	if (arp->op_code == htons(ARPOP_REPLY)) {
 		/* the arp must be sent on the selected rx channel */
 		tx_slave = rlb_choose_channel(skb, bond, arp);
-		if (tx_slave)
+		if (tx_slave && !bond_alb_bridged_mac(bond, eth_data))
 			bond_hw_addr_copy(arp->mac_src, tx_slave->dev->dev_addr,
 					  tx_slave->dev->addr_len);
 		netdev_dbg(bond->dev, "(slave %s): Server sent ARP Reply packet\n",
@@ -1305,6 +1315,23 @@ void bond_alb_deinitialize(struct bonding *bond)
 		rlb_deinitialize(bond);
 }
 
+static bool bond_alb_bridged_mac(struct bonding *bond, struct ethhdr *eth_data)
+{
+	if (BOND_MODE(bond) != BOND_MODE_ALB)
+		return false;
+
+	/* Don't modify source MACs that do not originate locally
+	 * (e.g.,arrive via a bridge).
+	 */
+	if (!netif_is_bridge_port(bond->dev))
+		return false;
+
+	if (bond_slave_has_mac_rx(bond, eth_data->h_source))
+		return false;
+
+	return true;
+}
+
 static netdev_tx_t bond_do_alb_xmit(struct sk_buff *skb, struct bonding *bond,
 				    struct slave *tx_slave)
 {
@@ -1319,7 +1346,8 @@ static netdev_tx_t bond_do_alb_xmit(struct sk_buff *skb, struct bonding *bond,
 	}
 
 	if (tx_slave && bond_slave_can_tx(tx_slave)) {
-		if (tx_slave != rcu_access_pointer(bond->curr_active_slave)) {
+		if (tx_slave != rcu_access_pointer(bond->curr_active_slave) &&
+		    !bond_alb_bridged_mac(bond, eth_data)) {
 			ether_addr_copy(eth_data->h_source,
 					tx_slave->dev->dev_addr);
 		}
@@ -1423,7 +1451,7 @@ struct slave *bond_xmit_alb_slave_get(struct bonding *bond,
 		/* IPv6 doesn't really use broadcast mac address, but leave
 		 * that here just in case.
 		 */
-		if (is_broadcast_ether_addr(eth_data->h_dest)) {
+		if (is_multicast_ether_addr(eth_data->h_dest)) {
 			do_tx_balance = false;
 			break;
 		}
@@ -1508,9 +1536,13 @@ struct slave *bond_xmit_alb_slave_get(struct bonding *bond,
 
 			slaves = rcu_dereference(bond->usable_slaves);
 			count = slaves ? READ_ONCE(slaves->count) : 0;
-			if (likely(count))
-				tx_slave = slaves->arr[bond_xmit_hash(bond, skb) %
-						       count];
+			if (likely(count)) {
+				u32 hash = bond_xmit_hash(bond, skb);
+				tx_slave = slaves->arr[hash % count];
+				slave_dbg(bond->dev, tx_slave->dev,
+					  "%s: got hash %u (count %d)\n",
+					  __func__, hash, count);
+			}
 		}
 	}
 	return tx_slave;

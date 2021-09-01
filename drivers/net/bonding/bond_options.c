@@ -46,6 +46,8 @@ static int bond_option_fail_over_mac_set(struct bonding *bond,
 					 const struct bond_opt_value *newval);
 static int bond_option_xmit_hash_policy_set(struct bonding *bond,
 					    const struct bond_opt_value *newval);
+static int bond_option_xmit_hash_mask_set(struct bonding *bond,
+					  const struct bond_opt_value *newval);
 static int bond_option_resend_igmp_set(struct bonding *bond,
 				       const struct bond_opt_value *newval);
 static int bond_option_num_peer_notif_set(struct bonding *bond,
@@ -102,7 +104,14 @@ static const struct bond_opt_value bond_xmit_hashtype_tbl[] = {
 	{ "encap2+3",    BOND_XMIT_POLICY_ENCAP23,     0},
 	{ "encap3+4",    BOND_XMIT_POLICY_ENCAP34,     0},
 	{ "vlan+srcmac", BOND_XMIT_POLICY_VLAN_SRCMAC, 0},
+	{ "custom",      BOND_XMIT_POLICY_CUSTOM,      0},
 	{ NULL,          -1,                           0},
+};
+
+static const struct bond_opt_value bond_xmit_hash_mask_tbl[] = {
+	{ "minval",  0x1,        BOND_VALFLAG_MIN | BOND_VALFLAG_DEFAULT},
+	{ "maxval",  0xffffffff, BOND_VALFLAG_MAX},
+	{ NULL,      -1,         0},
 };
 
 static const struct bond_opt_value bond_arp_validate_tbl[] = {
@@ -225,9 +234,16 @@ static const struct bond_option bond_opts[BOND_OPT_LAST] = {
 	[BOND_OPT_XMIT_HASH] = {
 		.id = BOND_OPT_XMIT_HASH,
 		.name = "xmit_hash_policy",
-		.desc = "balance-xor, 802.3ad, and tlb hashing method",
+		.desc = "balance-xor, 802.3ad, tlb and custom hashing method",
 		.values = bond_xmit_hashtype_tbl,
 		.set = bond_option_xmit_hash_policy_set
+	},
+	[BOND_OPT_XMIT_HASH_MASK] = {
+		.id = BOND_OPT_XMIT_HASH_MASK,
+		.name = "xmit_hash_mask",
+		.desc = "custom hashing policy field mask",
+		.values = bond_xmit_hash_mask_tbl,
+		.set = bond_option_xmit_hash_mask_set
 	},
 	[BOND_OPT_ARP_VALIDATE] = {
 		.id = BOND_OPT_ARP_VALIDATE,
@@ -1251,7 +1267,15 @@ static int bond_option_xmit_hash_policy_set(struct bonding *bond,
 	if (bond->dev->reg_state == NETREG_REGISTERED)
 		if (bond_set_tls_features(bond))
 			netdev_update_features(bond->dev);
+	return 0;
+}
 
+static int bond_option_xmit_hash_mask_set(struct bonding *bond,
+					  const struct bond_opt_value *newval)
+{
+	netdev_dbg(bond->dev, "Setting %s (0x%llx)\n", newval->string,
+		   newval->value);
+	bond->params.xmit_hash_mask = newval->value;
 	return 0;
 }
 

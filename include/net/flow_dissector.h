@@ -314,6 +314,7 @@ struct flow_keys {
 	struct flow_dissector_key_keyid keyid;
 	struct flow_dissector_key_ports ports;
 	struct flow_dissector_key_icmp icmp;
+	struct flow_dissector_key_eth_addrs eth;
 	/* 'addrs' must be the last member */
 	struct flow_dissector_key_addrs addrs;
 };

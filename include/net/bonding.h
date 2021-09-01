@@ -119,6 +119,7 @@ static inline int is_netpoll_tx_blocked(struct net_device *dev)
 struct bond_params {
 	int mode;
 	int xmit_policy;
+	u32 xmit_hash_mask;
 	int miimon;
 	u8 num_peer_notif;
 	int arp_interval;
@@ -344,6 +345,12 @@ static inline bool bond_mode_uses_primary(int mode)
 static inline bool bond_uses_primary(struct bonding *bond)
 {
 	return bond_mode_uses_primary(BOND_MODE(bond));
+}
+
+static inline bool bond_primary_rx_only(struct bonding *bond)
+{
+	int mode = BOND_MODE(bond);
+	return mode == BOND_MODE_ACTIVEBACKUP || mode == BOND_MODE_TLB;
 }
 
 static inline struct net_device *bond_option_active_slave_get_rcu(struct bonding *bond)

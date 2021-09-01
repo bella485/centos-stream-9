@@ -81,6 +81,9 @@ static void bond_info_show_master(struct seq_file *seq)
 					  bond->params.xmit_policy);
 		seq_printf(seq, "Transmit Hash Policy: %s (%d)\n",
 			   optval->string, bond->params.xmit_policy);
+		if (bond->params.xmit_policy == BOND_XMIT_POLICY_CUSTOM)
+			seq_printf(seq, "Transmit Hash Mask: 0x%08x\n",
+				   bond->params.xmit_hash_mask);
 	}
 
 	if (bond_uses_primary(bond)) {

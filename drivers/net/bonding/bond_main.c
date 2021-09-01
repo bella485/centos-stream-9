@@ -107,6 +107,7 @@ static char *lacp_rate;
 static int min_links;
 static char *ad_select;
 static char *xmit_hash_policy;
+static u32 xmit_hash_mask = BOND_HASH_FLD_MAC_SRC;
 static int arp_interval;
 static char *arp_ip_target[BOND_MAX_ARP_TARGETS];
 static char *arp_validate;
@@ -167,7 +168,10 @@ module_param(xmit_hash_policy, charp, 0);
 MODULE_PARM_DESC(xmit_hash_policy, "balance-alb, balance-tlb, balance-xor, 802.3ad hashing method; "
 				   "0 for layer 2 (default), 1 for layer 3+4, "
 				   "2 for layer 2+3, 3 for encap layer 2+3, "
-				   "4 for encap layer 3+4, 5 for vlan+srcmac");
+				   "4 for encap layer 3+4, 5 for vlan+srcmac,"
+				   "6 for custom");
+module_param(xmit_hash_mask, int, 0);
+MODULE_PARM_DESC(xmit_hash_mask, "transmit hash mask for custom hash policy");
 module_param(arp_interval, int, 0);
 MODULE_PARM_DESC(arp_interval, "arp interval in milliseconds");
 module_param_array(arp_ip_target, charp, NULL, 0);
@@ -247,6 +251,11 @@ static const struct flow_dissector_key flow_keys_bonding_keys[] = {
 		.key_id = FLOW_DISSECTOR_KEY_GRE_KEYID,
 		.offset = offsetof(struct flow_keys, keyid),
 	},
+	{
+		.key_id = FLOW_DISSECTOR_KEY_ETH_ADDRS,
+		.offset = offsetof(struct flow_keys, eth),
+	},
+
 };
 
 static struct flow_dissector flow_keys_bonding __read_mostly;
@@ -772,7 +781,7 @@ static int bond_set_promiscuity(struct bonding *bond, int inc)
 	struct list_head *iter;
 	int err = 0;
 
-	if (bond_uses_primary(bond)) {
+	if (bond_primary_rx_only(bond)) {
 		struct slave *curr_active = rtnl_dereference(bond->curr_active_slave);
 
 		if (curr_active)
@@ -795,7 +804,7 @@ static int bond_set_allmulti(struct bonding *bond, int inc)
 	struct list_head *iter;
 	int err = 0;
 
-	if (bond_uses_primary(bond)) {
+	if (bond_primary_rx_only(bond)) {
 		struct slave *curr_active = rtnl_dereference(bond->curr_active_slave);
 
 		if (curr_active)
@@ -1581,6 +1590,8 @@ static enum netdev_lag_hash bond_lag_hash_type(struct bonding *bond,
 		return NETDEV_LAG_HASH_E34;
 	case BOND_XMIT_POLICY_VLAN_SRCMAC:
 		return NETDEV_LAG_HASH_VLAN_SRCMAC;
+	case BOND_XMIT_POLICY_CUSTOM:
+		return NETDEV_LAG_HASH_CUSTOM;
 	default:
 		return NETDEV_LAG_HASH_UNKNOWN;
 	}
@@ -2088,7 +2099,7 @@ int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev,
 	/* If the mode uses primary, then the following is handled by
 	 * bond_change_active_slave().
 	 */
-	if (!bond_uses_primary(bond)) {
+	if (!bond_primary_rx_only(bond)) {
 		/* set promiscuity level to new slave */
 		if (bond_dev->flags & IFF_PROMISC) {
 			res = dev_set_promiscuity(slave_dev, 1);
@@ -2328,7 +2339,7 @@ static int __bond_release_one(struct net_device *bond_dev,
 	/* If the mode uses primary, then this case was handled above by
 	 * bond_change_active_slave(..., NULL)
 	 */
-	if (!bond_uses_primary(bond)) {
+	if (!bond_primary_rx_only(bond)) {
 		/* unset promiscuity level from slave
 		 * NOTE: The NETDEV_CHANGEADDR call above may change the value
 		 * of the IFF_PROMISC flag in the bond_dev, but we need the
@@ -3655,27 +3666,6 @@ static bool bond_flow_ip(struct sk_buff *skb, struct flow_keys *fk,
 	return true;
 }
 
-static u32 bond_vlan_srcmac_hash(struct sk_buff *skb)
-{
-	struct ethhdr *mac_hdr = (struct ethhdr *)skb_mac_header(skb);
-	u32 srcmac_vendor = 0, srcmac_dev = 0;
-	u16 vlan;
-	int i;
-
-	for (i = 0; i < 3; i++)
-		srcmac_vendor = (srcmac_vendor << 8) | mac_hdr->h_source[i];
-
-	for (i = 3; i < ETH_ALEN; i++)
-		srcmac_dev = (srcmac_dev << 8) | mac_hdr->h_source[i];
-
-	if (!skb_vlan_tag_present(skb))
-		return srcmac_vendor ^ srcmac_dev;
-
-	vlan = skb_vlan_tag_get(skb);
-
-	return vlan ^ srcmac_vendor ^ srcmac_dev;
-}
-
 /* Extract the appropriate headers based on bond's xmit policy */
 static bool bond_flow_dissect(struct bonding *bond, struct sk_buff *skb,
 			      struct flow_keys *fk)
@@ -3735,6 +3725,95 @@ static u32 bond_ip_hash(u32 hash, struct flow_keys *flow)
 	return hash >> 1;
 }
 
+/* L2 hash helper */
+static u32 hash_policy_l2(struct bonding *bond, struct sk_buff *skb)
+{
+	return bond_eth_hash(skb);
+}
+
+/* [encapsulated] layer 2+3 (IP ^ MAC) */
+static u32 hash_policy_l23(struct bonding *bond, struct sk_buff *skb)
+{
+	struct flow_keys flow;
+
+	if (!bond_flow_dissect(bond, skb, &flow))
+		return bond_eth_hash(skb);
+	return bond_ip_hash(bond_eth_hash(skb), &flow);
+}
+
+/* [encapsulated] layer 3+4 (IP ^ (TCP || UDP)) */
+static u32 hash_policy_l34(struct bonding *bond, struct sk_buff *skb)
+{
+	struct flow_keys flow;
+	u32 hash;
+
+	if (bond->params.xmit_policy == BOND_XMIT_POLICY_ENCAP34 &&
+	    skb->l4_hash)
+		return skb->hash;
+	if (!bond_flow_dissect(bond, skb, &flow))
+		return bond_eth_hash(skb);
+	if (flow.icmp.id)
+		memcpy(&hash, &flow.icmp, sizeof(hash));
+	else
+		memcpy(&hash, &flow.ports.ports, sizeof(hash));
+	return bond_ip_hash(hash, &flow);
+}
+
+static u32 hash_policy_vlan_srcmac(struct bonding *bond, struct sk_buff *skb)
+{
+	u32 hash = 0;
+	struct ethhdr *mac = (struct ethhdr *)skb_mac_header(skb);
+
+#if 0
+	if (skb_vlan_tag_present(skb))
+		hash = skb_vlan_tag_get(skb);
+#endif
+	hash ^= (u32)((mac->h_source[0] << 16) | (mac->h_source[1] << 8) |
+		(mac->h_source[2]));
+	hash ^= (u32)((mac->h_source[3] << 16) | (mac->h_source[4] << 8) |
+		(mac->h_source[5]));
+	return hash;
+}
+
+static u32 hash_policy_custom(struct bonding *bond, struct sk_buff *skb)
+{
+	struct flow_keys keys, hash_keys;
+
+	memset(&hash_keys, 0, sizeof(hash_keys));
+	if (!skb_flow_dissect(skb, &flow_keys_bonding, &keys, 0))
+		return bond_eth_hash(skb);
+	hash_keys.control.addr_type = keys.control.addr_type;
+	if (bond->params.xmit_hash_mask & BOND_HASH_FLD_MAC_DST)
+		memcpy(&hash_keys.eth.dst, &keys.eth.dst,
+		       sizeof(hash_keys.eth.dst));
+	if (bond->params.xmit_hash_mask & BOND_HASH_FLD_MAC_SRC)
+		memcpy(&hash_keys.eth.src, &keys.eth.src,
+		       sizeof(hash_keys.eth.src));
+	if (bond->params.xmit_hash_mask & BOND_HASH_FLD_N_PROTO)
+		hash_keys.basic.n_proto = keys.basic.n_proto;
+	if (bond->params.xmit_hash_mask & BOND_HASH_FLD_VLAN_ID)
+		memcpy(&hash_keys.vlan, &keys.vlan, sizeof(hash_keys.vlan));
+	if (bond->params.xmit_hash_mask & BOND_HASH_FLD_IP_PROTO)
+		hash_keys.basic.ip_proto = keys.basic.ip_proto;
+	if (bond->params.xmit_hash_mask & BOND_HASH_FLD_PORTS)
+		hash_keys.ports.ports = keys.ports.ports;
+	switch (hash_keys.control.addr_type) {
+	case FLOW_DISSECTOR_KEY_IPV4_ADDRS:
+		if (bond->params.xmit_hash_mask & BOND_HASH_FLD_IP_SRC)
+			hash_keys.addrs.v4addrs.src = keys.addrs.v4addrs.src;
+		if (bond->params.xmit_hash_mask & BOND_HASH_FLD_IP_DST)
+			hash_keys.addrs.v4addrs.dst = keys.addrs.v4addrs.dst;
+		break;
+	case FLOW_DISSECTOR_KEY_IPV6_ADDRS:
+		if (bond->params.xmit_hash_mask & BOND_HASH_FLD_IP_SRC)
+			hash_keys.addrs.v6addrs.src = keys.addrs.v6addrs.src;
+		if (bond->params.xmit_hash_mask & BOND_HASH_FLD_IP_DST)
+			hash_keys.addrs.v6addrs.dst = keys.addrs.v6addrs.dst;
+		break;
+	}
+	return flow_hash_from_keys(&hash_keys);
+}
+
 /**
  * bond_xmit_hash - generate a hash value based on the xmit policy
  * @bond: bonding device
@@ -3745,31 +3824,18 @@ static u32 bond_ip_hash(u32 hash, struct flow_keys *flow)
  */
 u32 bond_xmit_hash(struct bonding *bond, struct sk_buff *skb)
 {
-	struct flow_keys flow;
-	u32 hash;
+	typedef u32 (*xmit_hash_t)(struct bonding *, struct sk_buff *);
+	const static xmit_hash_t hash_policies[BOND_XMIT_POLICY_CUSTOM+1] = {
+		[BOND_XMIT_POLICY_LAYER2]      = hash_policy_l2,
+		[BOND_XMIT_POLICY_LAYER34]     = hash_policy_l34,
+		[BOND_XMIT_POLICY_LAYER23]     = hash_policy_l23,
+		[BOND_XMIT_POLICY_ENCAP23]     = hash_policy_l23,
+		[BOND_XMIT_POLICY_ENCAP34]     = hash_policy_l34,
+		[BOND_XMIT_POLICY_VLAN_SRCMAC] = hash_policy_vlan_srcmac,
+		[BOND_XMIT_POLICY_CUSTOM]      = hash_policy_custom,
+	};
 
-	if (bond->params.xmit_policy == BOND_XMIT_POLICY_ENCAP34 &&
-	    skb->l4_hash)
-		return skb->hash;
-
-	if (bond->params.xmit_policy == BOND_XMIT_POLICY_VLAN_SRCMAC)
-		return bond_vlan_srcmac_hash(skb);
-
-	if (bond->params.xmit_policy == BOND_XMIT_POLICY_LAYER2 ||
-	    !bond_flow_dissect(bond, skb, &flow))
-		return bond_eth_hash(skb);
-
-	if (bond->params.xmit_policy == BOND_XMIT_POLICY_LAYER23 ||
-	    bond->params.xmit_policy == BOND_XMIT_POLICY_ENCAP23) {
-		hash = bond_eth_hash(skb);
-	} else {
-		if (flow.icmp.id)
-			memcpy(&hash, &flow.icmp, sizeof(hash));
-		else
-			memcpy(&hash, &flow.ports.ports, sizeof(hash));
-	}
-
-	return bond_ip_hash(hash, &flow);
+	return hash_policies[bond->params.xmit_policy](bond, skb);
 }
 
 /*-------------------------- Device entry points ----------------------------*/
@@ -4087,7 +4153,7 @@ static void bond_set_rx_mode(struct net_device *bond_dev)
 	struct slave *slave;
 
 	rcu_read_lock();
-	if (bond_uses_primary(bond)) {
+	if (bond_primary_rx_only(bond)) {
 		slave = rcu_dereference(bond->curr_active_slave);
 		if (slave) {
 			dev_uc_sync(slave->dev, bond_dev);
@@ -5239,6 +5305,19 @@ static int bond_check_params(struct bond_params *params)
 		packets_per_slave = 1;
 	}
 
+	if (!(xmit_hashtype == BOND_XMIT_POLICY_CUSTOM)) {
+		if (xmit_hash_mask != BOND_HASH_FLD_MAC_SRC)
+			pr_warn("Warning: hash_policy_mask module parameter has no effect unless xmit_hash_policy == 6\n");
+	} else {
+		bond_opt_initval(&newval, xmit_hash_mask);
+		if (!bond_opt_parse(bond_opt_get(BOND_OPT_XMIT_HASH_MASK),
+						 &newval)) {
+			pr_warn("Warning: xmit_hash_mask (0x%x) should be between 0x1 and 0xffffffff, truncating\n",
+				xmit_hash_mask);
+			xmit_hash_mask = BOND_HASH_FLD_MAC_SRC;
+		}
+	}
+
 	if (bond_mode == BOND_MODE_ALB) {
 		pr_notice("In ALB mode you might experience client disconnections upon reconnection of a link if the bonding module updelay parameter (%d msec) is incompatible with the forwarding delay time of the switch\n",
 			  updelay);
@@ -5434,6 +5513,7 @@ static int bond_check_params(struct bond_params *params)
 	/* fill params struct with the proper values */
 	params->mode = bond_mode;
 	params->xmit_policy = xmit_hashtype;
+	params->xmit_hash_mask = xmit_hash_mask;
 	params->miimon = miimon;
 	params->num_peer_notif = num_peer_notif;
 	params->arp_interval = arp_interval;
