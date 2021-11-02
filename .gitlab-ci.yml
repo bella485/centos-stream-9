@@ -75,7 +75,7 @@ workflow: !reference [.workflow]
 # c9s CI
 c9s_merge_request:
   extends: [.trusted, .merge_request, .rhel_common,
-            .9-common, .trigger_c9s_pipeline]
+            .9-common, .trigger_c9s_pipeline, .coverage]
 
 c9s_realtime_check_merge_request:
   extends: [.trusted, .merge_request,
