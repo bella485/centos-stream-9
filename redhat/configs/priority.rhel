@@ -20,8 +20,8 @@ ORDER=common ark pending-common custom-overrides
 EMPTY=armv7hl armv7hl-debug armv7hl-lpae armv7hl-lpae-debug i686 i686-debug
 
 # x86_64
-x86_64=generic:generic-x86:generic-x86-x86_64:rt
-x86_64-debug=generic:generic-x86:generic-x86-x86_64:debug:debug-x86-x86_64:rt
+x86_64=generic:generic-x86:generic-x86-x86_64:auto
+x86_64-debug=generic:generic-x86:generic-x86-x86_64:debug:debug-x86-x86_64:auto
 
 # ppc64le
 ppc64le=generic:generic-powerpc
@@ -31,6 +31,7 @@ ppc64le-debug=generic:generic-powerpc:debug:debug-powerpc
 s390x=generic:generic-s390x
 s390x-debug=generic:generic-s390x:debug:debug-s390x
 s390x-zfcpdump=generic:generic-s390x:generic-s390x-zfcpdump
+
 # aarch64
 aarch64=generic:generic-arm:generic-arm-aarch64
 aarch64-debug=generic:generic-arm:generic-arm-aarch64:debug:debug-arm-aarch64
