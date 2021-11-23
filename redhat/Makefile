@@ -397,6 +397,9 @@ dist-brew dist-koji: dist-%: dist-srpm
 distg-brew distg-koji: distg-%:
 	$* $(BUILD_PROFILE) build $(BUILD_FLAGS) $(BUILD_TARGET) "$(RHGITURL)?redhat/koji#$(RHGITCOMMIT)"
 
+dist-auto-sig: dist-sources
+	$(REDHAT)/scripts/automotive_build_sig.sh "$(AUTOSIG_BRANCH)" "$(RHDISTGIT_CACHE)" "$(RHDISTGIT_TMP)" "$(TARBALL)" "$(PACKAGE_NAME)"
+
 .PHONY: $(REDHAT)/rpm/SOURCES/$(PACKAGE_NAME).spec
 $(REDHAT)/rpm/SOURCES/$(PACKAGE_NAME).spec:
 	@echo "dist-sources"
