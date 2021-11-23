@@ -185,3 +185,7 @@ else ifeq ("$(DISTRO)", "centos")
 else
   BUILD_SCRATCH_TARGET ?= rhel-$(RHEL_MAJOR).$(RHEL_MINOR).0-test-pesign
 endif
+
+ifeq ("$(DISTRO)", "centos")
+  AUTOSIG_BRANCH:="c$(RHEL_MAJOR)s-sig-automotive-main"
+endif
