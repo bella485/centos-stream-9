@@ -6123,8 +6123,13 @@ static bool io_drain_req(struct io_kiocb *req)
 
 	seq = io_get_sequence(req);
 	/* Still a chance to pass the sequence check */
-	if (!req_need_defer(req, seq) && list_empty_careful(&ctx->defer_list))
+	spin_lock(&ctx->completion_lock);
+	if (!req_need_defer(req, seq) && list_empty_careful(&ctx->defer_list)) {
+		spin_unlock(&ctx->completion_lock);
 		return false;
+	}
+	spin_unlock(&ctx->completion_lock);
+
 
 	ret = io_req_prep_async(req);
 	if (ret)
