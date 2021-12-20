@@ -361,6 +361,7 @@ struct klp_modinfo {
 };
 #endif
 
+#ifndef __GENKSYMS__ /* RH_KABI */
 struct module {
 	enum module_state state;
 
@@ -535,6 +536,7 @@ struct module {
 	unsigned int num_ei_funcs;
 #endif
 } ____cacheline_aligned __randomize_layout;
+#endif /* __GENKSYMS__ */
 #ifndef MODULE_ARCH_INIT
 #define MODULE_ARCH_INIT {}
 #endif
