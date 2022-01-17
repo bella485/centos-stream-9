@@ -182,12 +182,12 @@ static int notrace unwind_next(struct unwind_state *state)
 NOKPROBE_SYMBOL(unwind_next);
 
 static void notrace unwind(struct unwind_state *state,
-			   bool (*fn)(void *, unsigned long), void *data)
+			   stack_trace_consume_fn consume_entry, void *cookie)
 {
 	while (1) {
 		int ret;
 
-		if (!fn(data, state->pc))
+		if (!consume_entry(cookie, state->pc))
 			break;
 		ret = unwind_next(state);
 		if (ret < 0)
