@@ -933,6 +933,7 @@ static void redir_to_connected(int family, int sotype, int sock_mapfd,
 	u64 value;
 	u32 key;
 	char b;
+	int retries = 100;
 
 	zero_verdict_count(verd_mapfd);
 
@@ -993,10 +994,15 @@ static void redir_to_connected(int family, int sotype, int sock_mapfd,
 		goto close_peer1;
 	if (pass != 1)
 		FAIL("%s: want pass count 1, have %d", log_prefix, pass);
-
+again:
 	n = read(c0, &b, 1);
-	if (n < 0)
+	if (n < 0) {
+		if (errno == EAGAIN && retries--) {
+			usleep(1000);
+			goto again;
+		}
 		FAIL_ERRNO("%s: read", log_prefix);
+	}
 	if (n == 0)
 		FAIL("%s: incomplete read", log_prefix);
 
