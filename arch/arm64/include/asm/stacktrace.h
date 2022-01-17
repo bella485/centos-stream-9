@@ -51,6 +51,8 @@ struct stack_info {
  * @kr_cur:      When KRETPROBES is selected, holds the kretprobe instance
  *               associated with the most recently encountered replacement lr
  *               value.
+ *
+ * @task:        Pointer to the task structure.
  */
 struct unwind_state {
 	unsigned long fp;
@@ -61,6 +63,7 @@ struct unwind_state {
 #ifdef CONFIG_KRETPROBES
 	struct llist_node *kr_cur;
 #endif
+	struct task_struct *task;
 };
 
 extern void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk,
