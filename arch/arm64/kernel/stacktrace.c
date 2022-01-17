@@ -19,6 +19,25 @@
 #include <asm/stacktrace.h>
 
 /*
+ * Check the stack frame for conditions that make further unwinding unreliable.
+ */
+static void unwind_check_reliability(struct unwind_state *state)
+{
+	if (state->fp == state->final_fp) {
+		/* Final frame; no more unwind, no need to check reliability */
+		return;
+	}
+
+	/*
+	 * If the PC is not a known kernel text address, then we cannot
+	 * be sure that a subsequent unwind will be reliable, as we
+	 * don't know that the code follows our unwind requirements.
+	 */
+	if (!__kernel_text_address(state->pc))
+		state->reliable = false;
+}
+
+/*
  * AArch64 PCS assigns the frame pointer to x29.
  *
  * A simple function prologue looks like this:
@@ -54,6 +73,7 @@ static void unwind_init_common(struct unwind_state *state,
 	state->prev_fp = 0;
 	state->prev_type = STACK_TYPE_UNKNOWN;
 	state->failed = false;
+	state->reliable = true;
 
 	/* Stack trace terminates here. */
 	state->final_fp = (unsigned long)task_pt_regs(task)->stackframe;
@@ -208,11 +228,15 @@ static void notrace unwind_next(struct unwind_state *state)
 }
 NOKPROBE_SYMBOL(unwind_next);
 
-static void notrace unwind(struct unwind_state *state,
+static bool notrace unwind(struct unwind_state *state,
 			   stack_trace_consume_fn consume_entry, void *cookie)
 {
-	while (unwind_continue(state, consume_entry, cookie))
+	unwind_check_reliability(state);
+	while (unwind_continue(state, consume_entry, cookie)) {
 		unwind_next(state);
+		unwind_check_reliability(state);
+	}
+	return !state->failed && state->reliable;
 }
 NOKPROBE_SYMBOL(unwind);
 

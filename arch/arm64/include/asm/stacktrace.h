@@ -57,6 +57,8 @@ struct stack_info {
  * @final_fp	 Pointer to the final frame.
  *
  * @failed:      Unwind failed.
+ *
+ * @reliable:    Stack trace is reliable.
  */
 struct unwind_state {
 	unsigned long fp;
@@ -70,6 +72,7 @@ struct unwind_state {
 	struct task_struct *task;
 	unsigned long final_fp;
 	bool failed;
+	bool reliable;
 };
 
 extern void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk,
