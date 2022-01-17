@@ -52,7 +52,7 @@ struct stack_info {
  *               associated with the most recently encountered replacement lr
  *               value.
  */
-struct stackframe {
+struct unwind_state {
 	unsigned long fp;
 	unsigned long pc;
 	DECLARE_BITMAP(stacks_done, __NR_STACK_TYPES);
