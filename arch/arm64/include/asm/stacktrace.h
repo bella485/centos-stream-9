@@ -53,6 +53,10 @@ struct stack_info {
  *               value.
  *
  * @task:        Pointer to the task structure.
+ *
+ * @final_fp	 Pointer to the final frame.
+ *
+ * @failed:      Unwind failed.
  */
 struct unwind_state {
 	unsigned long fp;
@@ -64,6 +68,8 @@ struct unwind_state {
 	struct llist_node *kr_cur;
 #endif
 	struct task_struct *task;
+	unsigned long final_fp;
+	bool failed;
 };
 
 extern void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk,
