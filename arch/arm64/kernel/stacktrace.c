@@ -343,3 +343,25 @@ noinline notrace void arch_stack_walk(stack_trace_consume_fn consume_entry,
 
 	unwind(&state, consume_entry, cookie);
 }
+
+/*
+ * arch_stack_walk_reliable() may not be used for livepatch until all of
+ * the reliability checks are in place in unwind_consume(). However,
+ * debug and test code can choose to use it even if all the checks are not
+ * in place.
+ */
+noinline int notrace arch_stack_walk_reliable(stack_trace_consume_fn consume_fn,
+					      void *cookie,
+					      struct task_struct *task)
+{
+	struct unwind_state state;
+	bool reliable;
+
+	if (task == current)
+		unwind_init_from_current(&state, task);
+	else
+		unwind_init_from_task(&state, task);
+
+	reliable = unwind(&state, consume_fn, cookie);
+	return reliable ? 0 : -EINVAL;
+}
