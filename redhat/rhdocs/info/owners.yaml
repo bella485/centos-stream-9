@@ -2788,7 +2788,7 @@ subsystems:
      - name: Phil Auld
        email: pauld@redhat.com
      - name: Wander Costa
-       email: wcosta@redhat.com
+       email: wander@redhat.com
    paths:
        includes:
           - Documentation/locking/
@@ -4088,7 +4088,7 @@ subsystems:
      - name: Phil Auld
        email: pauld@redhat.com
      - name: Wander Costa
-       email: wcosta@redhat.com
+       email: wander@redhat.com
    paths:
        includes:
           - Documentation/RCU/
@@ -4252,7 +4252,7 @@ subsystems:
      - name: Vladis Dronov
        email: vdronov@redhat.com
      - name: Wander Costa
-       email: wcosta@redhat.com
+       email: wander@redhat.com
      - name: Yannick Cote
        email: ycote@redhat.com
    paths:
@@ -4278,7 +4278,7 @@ subsystems:
      - name: Richard Guy Briggs
        email: rbriggs@redhat.com
      - name: Wander Costa
-       email: wcosta@redhat.com
+       email: wander@redhat.com
    paths:
        includes:
           - include/linux/selinux*
