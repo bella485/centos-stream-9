@@ -148,6 +148,11 @@ struct cxl_register_map {
 		struct cxl_component_reg_map component_map;
 		struct cxl_device_reg_map device_map;
 	};
+
+	RH_KABI_RESERVE(1)
+	RH_KABI_RESERVE(2)
+	RH_KABI_RESERVE(3)
+	RH_KABI_RESERVE(4)
 };
 
 void cxl_probe_component_regs(struct device *dev, void __iomem *base,
@@ -201,6 +206,11 @@ struct cxl_decoder {
 	enum cxl_decoder_type target_type;
 	unsigned long flags;
 	struct cxl_dport *target[];
+
+	RH_KABI_RESERVE(1)
+	RH_KABI_RESERVE(2)
+	RH_KABI_RESERVE(3)
+	RH_KABI_RESERVE(4)
 };
 
 
@@ -224,6 +234,11 @@ struct cxl_nvdimm {
 	struct device dev;
 	struct cxl_memdev *cxlmd;
 	struct nvdimm *nvdimm;
+
+	RH_KABI_RESERVE(1)
+	RH_KABI_RESERVE(2)
+	RH_KABI_RESERVE(3)
+	RH_KABI_RESERVE(4)
 };
 
 /**
