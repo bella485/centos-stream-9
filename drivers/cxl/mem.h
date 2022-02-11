@@ -46,6 +46,11 @@ struct cxl_memdev {
 	struct cdev cdev;
 	struct cxl_mem *cxlm;
 	int id;
+
+	RH_KABI_RESERVE(1)
+	RH_KABI_RESERVE(2)
+	RH_KABI_RESERVE(3)
+	RH_KABI_RESERVE(4)
 };
 
 /**
