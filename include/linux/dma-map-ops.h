@@ -9,7 +9,12 @@
 #include <linux/dma-mapping.h>
 #include <linux/pgtable.h>
 
+#include <linux/rh_kabi.h>
+
 struct cma;
+
+struct dma_map_ops_extended_rh {
+};
 
 struct dma_map_ops {
 	void *(*alloc)(struct device *dev, size_t size,
@@ -70,6 +75,15 @@ struct dma_map_ops {
 	u64 (*get_required_mask)(struct device *dev);
 	size_t (*max_mapping_size)(struct device *dev);
 	unsigned long (*get_merge_boundary)(struct device *dev);
+	RH_KABI_RESERVE(1)
+	RH_KABI_RESERVE(2)
+	RH_KABI_RESERVE(3)
+	RH_KABI_RESERVE(4)
+	RH_KABI_RESERVE(5)
+	RH_KABI_RESERVE(6)
+	RH_KABI_RESERVE(7)
+	RH_KABI_RESERVE(8)
+	RH_KABI_AUX_EMBED(dma_map_ops_extended)
 };
 
 #ifdef CONFIG_DMA_OPS
