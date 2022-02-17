@@ -223,4 +223,9 @@ static __always_inline bool guest_pv_has(struct kvm_vcpu *vcpu,
 	return vcpu->arch.pv_cpuid.features & (1u << kvm_feature);
 }
 
+static __always_inline u64 kvm_guest_supported_xcr0(struct kvm_vcpu *vcpu)
+{
+	return vcpu->arch.guest_fpu.fpstate->user_xfeatures;
+}
+
 #endif
