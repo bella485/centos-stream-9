@@ -154,6 +154,7 @@ static void kvm_vcpu_after_set_cpuid(struct kvm_vcpu *vcpu)
 {
 	struct kvm_lapic *apic = vcpu->arch.apic;
 	struct kvm_cpuid_entry2 *best;
+	u64 guest_supported_xcr0 = 0;
 
 	best = kvm_find_cpuid_entry(vcpu, 1, 0);
 	if (best && apic) {
@@ -166,11 +167,8 @@ static void kvm_vcpu_after_set_cpuid(struct kvm_vcpu *vcpu)
 	}
 
 	best = kvm_find_cpuid_entry(vcpu, 0xD, 0);
-	if (!best)
-		vcpu->arch.guest_supported_xcr0 = 0;
-	else
-		vcpu->arch.guest_supported_xcr0 =
-			(best->eax | ((u64)best->edx << 32)) & supported_xcr0;
+	if (best)
+		guest_supported_xcr0 = kvm_guest_supported_xcr0(vcpu);
 
 	/*
 	 * Bits 127:0 of the allowed SECS.ATTRIBUTES (CPUID.0x12.0x1) enumerate
@@ -182,10 +180,12 @@ static void kvm_vcpu_after_set_cpuid(struct kvm_vcpu *vcpu)
 	 */
 	best = kvm_find_cpuid_entry(vcpu, 0x12, 0x1);
 	if (best) {
-		best->ecx &= vcpu->arch.guest_supported_xcr0 & 0xffffffff;
-		best->edx &= vcpu->arch.guest_supported_xcr0 >> 32;
+		best->ecx &= guest_supported_xcr0 & 0xffffffff;
+		best->edx &= guest_supported_xcr0 >> 32;
 		best->ecx |= XFEATURE_MASK_FPSSE;
 	}
+
+	vcpu->arch.guest_fpu.fpstate->user_xfeatures = guest_supported_xcr0;
 
 	kvm_update_pv_runtime(vcpu);
 
