@@ -8,8 +8,10 @@ ifeq ("$(ZSTREAM)", "yes")
   __YSTREAM = no
   ifeq ("$(origin RHDISTGIT_BRANCH)", "command line")
     __ZSTREAM = branch
+    ZSTREAM_NVR = branch
   else
     __ZSTREAM = yes
+    ZSTREAM_NVR = yes
   endif
   BUILDOPTS += +kabidupchk
 else
@@ -335,7 +337,7 @@ dist-release-changed: setup-source
 		echo "Nothing changed, skipping updates"; \
 	else \
 		$(GIT) checkout -- $(REDHAT)/$(CHANGELOG); \
-		$(REDHAT)/scripts/new_release.sh $(REDHAT) $(__YSTREAM) $(__ZSTREAM) $(BUMP_RELEASE); \
+		$(REDHAT)/scripts/new_release.sh $(REDHAT) $(__YSTREAM) $(ZSTREAM_NVR) $(BUMP_RELEASE); \
 		$(MAKE) dist-release-finish; \
 	fi
 dist-release: dist-clean-sources
