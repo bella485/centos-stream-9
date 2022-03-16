@@ -38,3 +38,9 @@ USE_DIST_IN_SOURCE:=1
 # to '0'.
 INCLUDE_FEDORA_FILES:=0
 INCLUDE_RHEL_FILES:=1
+
+# ZSTREAM_NVR enables zstream versioning of releases, it doesn't affect
+# genspec source of metadata or rh-dist-git kabi upload. It is set
+# automatically to "yes" or "branch" when ZSTREAM == "yes"
+ZSTREAM_NVR:=no
+
