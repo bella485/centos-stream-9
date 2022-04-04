@@ -18,6 +18,80 @@
 #include <asm/stack_pointer.h>
 #include <asm/stacktrace.h>
 
+struct code_range {
+	unsigned long	start;
+	unsigned long	end;
+};
+
+static struct code_range	*sym_code_functions;
+static int			num_sym_code_functions;
+
+int __init init_sym_code_functions(void)
+{
+	size_t size = (unsigned long)__sym_code_functions_end -
+		      (unsigned long)__sym_code_functions_start;
+
+	sym_code_functions = (struct code_range *)__sym_code_functions_start;
+	/*
+	 * Order it so that sym_code_functions is not visible before
+	 * num_sym_code_functions.
+	 */
+	smp_mb();
+	num_sym_code_functions = size / sizeof(struct code_range);
+
+	return 0;
+}
+early_initcall(init_sym_code_functions);
+
+/*
+ * Check the stack frame for conditions that make further unwinding unreliable.
+ */
+static void unwind_check_reliability(struct unwind_state *state)
+{
+	const struct code_range *range;
+	unsigned long pc;
+	int i;
+
+	if (state->fp == state->final_fp) {
+		/* Final frame; no more unwind, no need to check reliability */
+		return;
+	}
+
+	/*
+	 * If the PC is not a known kernel text address, then we cannot
+	 * be sure that a subsequent unwind will be reliable, as we
+	 * don't know that the code follows our unwind requirements.
+	 */
+	if (!__kernel_text_address(state->pc))
+		state->reliable = false;
+
+	/*
+	 * Check the return PC against sym_code_functions[]. If there is a
+	 * match, then the consider the stack frame unreliable.
+	 *
+	 * As SYM_CODE functions don't follow the usual calling conventions,
+	 * we assume by default that any SYM_CODE function cannot be unwound
+	 * reliably.
+	 *
+	 * Note that this includes:
+	 *
+	 * - Exception handlers and entry assembly
+	 * - Trampoline assembly (e.g., ftrace, kprobes)
+	 * - Hypervisor-related assembly
+	 * - Hibernation-related assembly
+	 * - CPU start-stop, suspend-resume assembly
+	 * - Kernel relocation assembly
+	 */
+	pc = state->pc;
+	for (i = 0; i < num_sym_code_functions; i++) {
+		range = &sym_code_functions[i];
+		if (pc >= range->start && pc < range->end) {
+			state->reliable = false;
+			return;
+		}
+	}
+}
+
 /*
  * AArch64 PCS assigns the frame pointer to x29.
  *
@@ -33,28 +107,94 @@
  */
 
 
-void start_backtrace(struct stackframe *frame, unsigned long fp,
-		     unsigned long pc)
+static void unwind_init_common(struct unwind_state *state,
+			       struct task_struct *task)
 {
-	frame->fp = fp;
-	frame->pc = pc;
-#ifdef CONFIG_FUNCTION_GRAPH_TRACER
-	frame->graph = 0;
+	state->task = task;
+#ifdef CONFIG_KRETPROBES
+	state->kr_cur = NULL;
 #endif
 
 	/*
 	 * Prime the first unwind.
 	 *
-	 * In unwind_frame() we'll check that the FP points to a valid stack,
+	 * In unwind_next() we'll check that the FP points to a valid stack,
 	 * which can't be STACK_TYPE_UNKNOWN, and the first unwind will be
 	 * treated as a transition to whichever stack that happens to be. The
 	 * prev_fp value won't be used, but we set it to 0 such that it is
 	 * definitely not an accessible stack address.
 	 */
-	bitmap_zero(frame->stacks_done, __NR_STACK_TYPES);
-	frame->prev_fp = 0;
-	frame->prev_type = STACK_TYPE_UNKNOWN;
+	bitmap_zero(state->stacks_done, __NR_STACK_TYPES);
+	state->prev_fp = 0;
+	state->prev_type = STACK_TYPE_UNKNOWN;
+	state->failed = false;
+	state->reliable = true;
+
+	/* Stack trace terminates here. */
+	state->final_fp = (unsigned long)task_pt_regs(task)->stackframe;
 }
+NOKPROBE_SYMBOL(unwind_init_common);
+
+/*
+ * TODO: document requirements here.
+ */
+static inline void unwind_init_from_regs(struct unwind_state *state,
+					 struct task_struct *task,
+					 struct pt_regs *regs)
+{
+	unwind_init_common(state, task);
+
+	state->fp = regs->regs[29];
+	state->pc = regs->pc;
+}
+
+/*
+ * TODO: document requirements here.
+ *
+ * Note: this is always inlined, and we expect our caller to be a noinline
+ * function, such that this starts from our caller's caller.
+ */
+static __always_inline void unwind_init_from_current(struct unwind_state *state,
+						     struct task_struct *task)
+{
+	unwind_init_common(state, task);
+
+	state->fp = (unsigned long)__builtin_frame_address(1);
+	state->pc = (unsigned long)__builtin_return_address(0);
+}
+
+/*
+ * TODO: document requirements here.
+ *
+ * The caller guarantees that the task is not running.
+ */
+static inline void unwind_init_from_task(struct unwind_state *state,
+					 struct task_struct *task)
+{
+	unwind_init_common(state, task);
+
+	state->fp = thread_saved_fp(task);
+	state->pc = thread_saved_pc(task);
+}
+
+static bool notrace unwind_continue(struct unwind_state *state,
+				    stack_trace_consume_fn consume_entry,
+				    void *cookie)
+{
+	if (state->failed) {
+		/* PC is suspect. Cannot consume it. */
+		return false;
+	}
+
+	if (!consume_entry(cookie, state->pc)) {
+		/* Caller terminated the unwind. */
+		state->failed = true;
+		return false;
+	}
+
+	return state->fp != state->final_fp;
+}
+NOKPROBE_SYMBOL(unwind_continue);
 
 /*
  * Unwind from one frame record (A) to the next frame record (B).
@@ -63,26 +203,26 @@ void start_backtrace(struct stackframe *frame, unsigned long fp,
  * records (e.g. a cycle), determined based on the location and fp value of A
  * and the location (but not the fp value) of B.
  */
-int notrace unwind_frame(struct task_struct *tsk, struct stackframe *frame)
+static void notrace unwind_next(struct unwind_state *state)
 {
-	unsigned long fp = frame->fp;
+	unsigned long fp = state->fp;
 	struct stack_info info;
+	struct task_struct *tsk = state->task;
 
-	if (!tsk)
-		tsk = current;
+	if (fp & 0x7) {
+		state->failed = true;
+		return;
+	}
 
-	/* Final frame; nothing to unwind */
-	if (fp == (unsigned long)task_pt_regs(tsk)->stackframe)
-		return -ENOENT;
+	if (!on_accessible_stack(tsk, fp, 16, &info)) {
+		state->failed = true;
+		return;
+	}
 
-	if (fp & 0x7)
-		return -EINVAL;
-
-	if (!on_accessible_stack(tsk, fp, 16, &info))
-		return -EINVAL;
-
-	if (test_bit(info.type, frame->stacks_done))
-		return -EINVAL;
+	if (test_bit(info.type, state->stacks_done)) {
+		state->failed = true;
+		return;
+	}
 
 	/*
 	 * As stacks grow downward, any valid record on the same stack must be
@@ -97,78 +237,78 @@ int notrace unwind_frame(struct task_struct *tsk, struct stackframe *frame)
 	 * stack to another, it's never valid to unwind back to that first
 	 * stack.
 	 */
-	if (info.type == frame->prev_type) {
-		if (fp <= frame->prev_fp)
-			return -EINVAL;
+	if (info.type == state->prev_type) {
+		if (fp <= state->prev_fp) {
+			state->failed = true;
+			return;
+		}
 	} else {
-		set_bit(frame->prev_type, frame->stacks_done);
+		set_bit(state->prev_type, state->stacks_done);
 	}
 
 	/*
 	 * Record this frame record's values and location. The prev_fp and
-	 * prev_type are only meaningful to the next unwind_frame() invocation.
+	 * prev_type are only meaningful to the next unwind_next() invocation.
 	 */
-	frame->fp = READ_ONCE_NOCHECK(*(unsigned long *)(fp));
-	frame->pc = READ_ONCE_NOCHECK(*(unsigned long *)(fp + 8));
-	frame->prev_fp = fp;
-	frame->prev_type = info.type;
+	state->fp = READ_ONCE_NOCHECK(*(unsigned long *)(fp));
+	state->pc = READ_ONCE_NOCHECK(*(unsigned long *)(fp + 8));
+	state->prev_fp = fp;
+	state->prev_type = info.type;
+
+	state->pc = ptrauth_strip_insn_pac(state->pc);
 
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
 	if (tsk->ret_stack &&
-		(ptrauth_strip_insn_pac(frame->pc) == (unsigned long)return_to_handler)) {
-		struct ftrace_ret_stack *ret_stack;
+		(state->pc == (unsigned long)return_to_handler)) {
+		unsigned long orig_pc;
 		/*
 		 * This is a case where function graph tracer has
 		 * modified a return address (LR) in a stack frame
 		 * to hook a function return.
 		 * So replace it to an original value.
 		 */
-		ret_stack = ftrace_graph_get_ret_stack(tsk, frame->graph++);
-		if (WARN_ON_ONCE(!ret_stack))
-			return -EINVAL;
-		frame->pc = ret_stack->ret;
+		orig_pc = ftrace_graph_ret_addr(tsk, NULL, state->pc,
+						(void *)state->fp);
+		if (WARN_ON_ONCE(state->pc == orig_pc)) {
+			state->failed = true;
+			return;
+		}
+		state->pc = orig_pc;
 	}
 #endif /* CONFIG_FUNCTION_GRAPH_TRACER */
-
-	frame->pc = ptrauth_strip_insn_pac(frame->pc);
-
-	return 0;
+#ifdef CONFIG_KRETPROBES
+	if (is_kretprobe_trampoline(state->pc))
+		state->pc = kretprobe_find_ret_addr(tsk, (void *)state->fp, &state->kr_cur);
+#endif
 }
-NOKPROBE_SYMBOL(unwind_frame);
+NOKPROBE_SYMBOL(unwind_next);
 
-void notrace walk_stackframe(struct task_struct *tsk, struct stackframe *frame,
-			     bool (*fn)(void *, unsigned long), void *data)
+static bool notrace unwind(struct unwind_state *state,
+			   stack_trace_consume_fn consume_entry, void *cookie)
 {
-	while (1) {
-		int ret;
-
-		if (!fn(data, frame->pc))
-			break;
-		ret = unwind_frame(tsk, frame);
-		if (ret < 0)
-			break;
+	unwind_check_reliability(state);
+	while (unwind_continue(state, consume_entry, cookie)) {
+		unwind_next(state);
+		unwind_check_reliability(state);
 	}
+	return !state->failed && state->reliable;
 }
-NOKPROBE_SYMBOL(walk_stackframe);
+NOKPROBE_SYMBOL(unwind);
 
-static void dump_backtrace_entry(unsigned long where, const char *loglvl)
+static bool dump_backtrace_entry(void *arg, unsigned long where)
 {
+	char *loglvl = arg;
 	printk("%s %pSb\n", loglvl, (void *)where);
+	return true;
 }
 
 void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk,
 		    const char *loglvl)
 {
-	struct stackframe frame;
-	int skip = 0;
-
 	pr_debug("%s(regs = %p tsk = %p)\n", __func__, regs, tsk);
 
-	if (regs) {
-		if (user_mode(regs))
-			return;
-		skip = 1;
-	}
+	if (regs && user_mode(regs))
+		return;
 
 	if (!tsk)
 		tsk = current;
@@ -176,36 +316,8 @@ void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk,
 	if (!try_get_task_stack(tsk))
 		return;
 
-	if (tsk == current) {
-		start_backtrace(&frame,
-				(unsigned long)__builtin_frame_address(0),
-				(unsigned long)dump_backtrace);
-	} else {
-		/*
-		 * task blocked in __switch_to
-		 */
-		start_backtrace(&frame,
-				thread_saved_fp(tsk),
-				thread_saved_pc(tsk));
-	}
-
 	printk("%sCall trace:\n", loglvl);
-	do {
-		/* skip until specified stack frame */
-		if (!skip) {
-			dump_backtrace_entry(frame.pc, loglvl);
-		} else if (frame.fp == regs->regs[29]) {
-			skip = 0;
-			/*
-			 * Mostly, this is the case where this function is
-			 * called in panic/abort. As exception handler's
-			 * stack frame does not contain the corresponding pc
-			 * at which an exception has taken place, use regs->pc
-			 * instead.
-			 */
-			dump_backtrace_entry(regs->pc, loglvl);
-		}
-	} while (!unwind_frame(tsk, &frame));
+	arch_stack_walk(dump_backtrace_entry, (void *)loglvl, tsk, regs);
 
 	put_task_stack(tsk);
 }
@@ -216,25 +328,40 @@ void show_stack(struct task_struct *tsk, unsigned long *sp, const char *loglvl)
 	barrier();
 }
 
-#ifdef CONFIG_STACKTRACE
-
 noinline notrace void arch_stack_walk(stack_trace_consume_fn consume_entry,
 			      void *cookie, struct task_struct *task,
 			      struct pt_regs *regs)
 {
-	struct stackframe frame;
+	struct unwind_state state;
 
 	if (regs)
-		start_backtrace(&frame, regs->regs[29], regs->pc);
+		unwind_init_from_regs(&state, task, regs);
 	else if (task == current)
-		start_backtrace(&frame,
-				(unsigned long)__builtin_frame_address(1),
-				(unsigned long)__builtin_return_address(0));
+		unwind_init_from_current(&state, task);
 	else
-		start_backtrace(&frame, thread_saved_fp(task),
-				thread_saved_pc(task));
+		unwind_init_from_task(&state, task);
 
-	walk_stackframe(task, &frame, consume_entry, cookie);
+	unwind(&state, consume_entry, cookie);
 }
 
-#endif
+/*
+ * arch_stack_walk_reliable() may not be used for livepatch until all of
+ * the reliability checks are in place in unwind_consume(). However,
+ * debug and test code can choose to use it even if all the checks are not
+ * in place.
+ */
+noinline int notrace arch_stack_walk_reliable(stack_trace_consume_fn consume_fn,
+					      void *cookie,
+					      struct task_struct *task)
+{
+	struct unwind_state state;
+	bool reliable;
+
+	if (task == current)
+		unwind_init_from_current(&state, task);
+	else
+		unwind_init_from_task(&state, task);
+
+	reliable = unwind(&state, consume_fn, cookie);
+	return reliable ? 0 : -EINVAL;
+}
