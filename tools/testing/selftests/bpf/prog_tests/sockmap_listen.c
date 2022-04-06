@@ -1692,10 +1692,8 @@ static void udp_redir_to_connected(int family, int sotype, int sock_mapfd,
 again:
 	n = read(mode == REDIR_INGRESS ? p0 : c0, &b, 1);
 	if (n < 0) {
-		if (errno == EAGAIN && retries--) {
-			usleep(1000);
+		if (errno == EAGAIN && retries--)
 			goto again;
-		}
 		FAIL_ERRNO("%s: read", log_prefix);
 	}
 	if (n == 0)
