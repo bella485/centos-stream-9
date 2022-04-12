@@ -73,6 +73,10 @@ BUILD_TARGET ?=
 # This sets the koji/brew configuration profile variable.
 BUILD_PROFILE ?=
 
+# This sets the koji|brew build flags for the dist[g]-koji|brew targets.  These
+# options are passed directly to the brew and koji commands in those targets.
+BUILD_FLAGS ?=
+
 # This overrides the default git repository for the distg-* targets.  See
 # the 'make dist-full-help' entry for distg-brew for information on setting
 # rhg.url.

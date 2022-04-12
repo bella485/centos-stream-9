@@ -251,6 +251,16 @@ RHJOBS?=$(shell j=$$(echo $(MAKEFLAGS) | grep -Eo "\ -j[0-9]*" | xargs ); \
 		[ -z "$${j}" ] && nproc --all || echo $${j}; \
 	fi)
 
+ifndef BUILD_FLAGS
+  ifeq ($(filter $(MAKECMDGOALS),dist-brew distg-brew),)
+	BUILD_FLAGS := $(BREW_FLAGS)
+  endif
+  ifeq ($(filter $(MAKECMDGOALS),dist-koji distg-koji),)
+	BUILD_FLAGS := $(KOJI_FLAGS)
+  endif
+  BUILD_FLAGS += $(TEST_FLAGS)
+endif
+
 default: dist-help
 
 dist-python-check:
@@ -569,12 +579,6 @@ dist-fedora-release: git-tree-check
 dist-fedora-release-push: export DIST_PUSH="1"
 dist-fedora-release-push: dist-fedora-release
 
-.PHONY: dist-brew dist-koji
-dist-brew : BUILD_FLAGS ?= $(BREW_FLAGS) $(TEST_FLAGS)
-dist-koji : BUILD_FLAGS ?= $(KOJI_FLAGS) $(TEST_FLAGS)
-distg-brew: BUILD_FLAGS ?= $(BREW_FLAGS) $(TEST_FLAGS)
-distg-koji: BUILD_FLAGS ?= $(KOJI_FLAGS) $(TEST_FLAGS)
-
 dist-vr-check:
 	@# builds may include a s390x+zfcpdump arch build.  UTS_RELEASE can only have a
 	@# version-release string with max 64 chars.  The version-release for s390x+zfcpdump
@@ -584,7 +588,7 @@ dist-vr-check:
 		exit 1; \
 	fi
 
-dist-brew dist-koji: dist-%: dist-vr-check dist-srpm
+dist-brew dist-koji: dist-%: dist-srpm
 	$* $(BUILD_PROFILE) build $(BUILD_FLAGS) $(BUILD_TARGET) $(SRPMS)/$(PACKAGE_NAME)-$(KVERSION)-$(PKGRELEASE)$(SRPM_DIST).src.rpm $(OUTPUT_FILE)
 
 distg-brew distg-koji: distg-%: dist-vr-check
