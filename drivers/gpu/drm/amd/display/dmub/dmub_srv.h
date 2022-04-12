@@ -96,6 +96,7 @@ enum dmub_asic {
 	DMUB_ASIC_DCN302,
 	DMUB_ASIC_DCN303,
 	DMUB_ASIC_DCN31,
+	DMUB_ASIC_DCN31B,
 	DMUB_ASIC_MAX,
 };
 
@@ -118,6 +119,7 @@ enum dmub_notification_type {
 	DMUB_NOTIFICATION_AUX_REPLY,
 	DMUB_NOTIFICATION_HPD,
 	DMUB_NOTIFICATION_HPD_IRQ,
+	DMUB_NOTIFICATION_SET_CONFIG_REPLY,
 	DMUB_NOTIFICATION_MAX
 };
 
@@ -235,6 +237,8 @@ struct dmub_srv_hw_params {
 	bool load_inst_const;
 	bool skip_panel_power_sequence;
 	bool disable_z10;
+	bool dpia_supported;
+	bool disable_dpia;
 };
 
 /**
@@ -352,6 +356,8 @@ struct dmub_srv_hw_funcs {
 
 	uint32_t (*get_gpint_response)(struct dmub_srv *dmub);
 
+	uint32_t (*get_gpint_dataout)(struct dmub_srv *dmub);
+
 	void (*send_inbox0_cmd)(struct dmub_srv *dmub, union dmub_inbox0_data_register data);
 	uint32_t (*get_current_time)(struct dmub_srv *dmub);
 
@@ -435,6 +441,7 @@ struct dmub_notification {
 	union {
 		struct aux_reply_data aux_reply;
 		enum dp_hpd_status hpd_status;
+		enum set_config_status sc_status;
 	};
 };
 
@@ -675,6 +682,22 @@ dmub_srv_send_gpint_command(struct dmub_srv *dmub,
  */
 enum dmub_status dmub_srv_get_gpint_response(struct dmub_srv *dmub,
 					     uint32_t *response);
+
+/**
+ * dmub_srv_get_gpint_dataout() - Queries the GPINT DATAOUT.
+ * @dmub: the dmub service
+ * @dataout: the data for the GPINT DATAOUT
+ *
+ * Returns the response code for the last GPINT DATAOUT interrupt.
+ *
+ * Can be called after software initialization.
+ *
+ * Return:
+ *   DMUB_STATUS_OK - success
+ *   DMUB_STATUS_INVALID - unspecified error
+ */
+enum dmub_status dmub_srv_get_gpint_dataout(struct dmub_srv *dmub,
+					     uint32_t *dataout);
 
 /**
  * dmub_flush_buffer_mem() - Read back entire frame buffer region.
