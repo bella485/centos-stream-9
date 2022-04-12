@@ -307,6 +307,21 @@ uint32_t dmub_dcn31_get_gpint_response(struct dmub_srv *dmub)
 	return REG_READ(DMCUB_SCRATCH7);
 }
 
+uint32_t dmub_dcn31_get_gpint_dataout(struct dmub_srv *dmub)
+{
+	uint32_t dataout = REG_READ(DMCUB_GPINT_DATAOUT);
+
+	REG_UPDATE(DMCUB_INTERRUPT_ENABLE, DMCUB_GPINT_IH_INT_EN, 0);
+
+	REG_WRITE(DMCUB_GPINT_DATAOUT, 0);
+	REG_UPDATE(DMCUB_INTERRUPT_ACK, DMCUB_GPINT_IH_INT_ACK, 1);
+	REG_UPDATE(DMCUB_INTERRUPT_ACK, DMCUB_GPINT_IH_INT_ACK, 0);
+
+	REG_UPDATE(DMCUB_INTERRUPT_ENABLE, DMCUB_GPINT_IH_INT_EN, 1);
+
+	return dataout;
+}
+
 union dmub_fw_boot_status dmub_dcn31_get_fw_boot_status(struct dmub_srv *dmub)
 {
 	union dmub_fw_boot_status status;
@@ -320,6 +335,10 @@ void dmub_dcn31_enable_dmub_boot_options(struct dmub_srv *dmub, const struct dmu
 	union dmub_fw_boot_options boot_options = {0};
 
 	boot_options.bits.z10_disable = params->disable_z10;
+	boot_options.bits.dpia_supported = params->dpia_supported;
+	boot_options.bits.enable_dpia = params->disable_dpia ? 0 : 1;
+
+	boot_options.bits.sel_mux_phy_c_d_phy_f_g = (dmub->asic == DMUB_ASIC_DCN31B) ? 1 : 0;
 
 	REG_WRITE(DMCUB_SCRATCH14, boot_options.all);
 }
