@@ -50,3 +50,8 @@ PACKAGE_NAME ?= kernel
 
 # This is the executable for 'git' commands.
 GIT ?= git
+
+# This is the referenced HEAD commit for git commands and can be used to change
+# the "top of tree" commit ID.  This is useful in cases where users want to
+# build against an older commit but do not want to check out the tree.
+HEAD ?= HEAD
