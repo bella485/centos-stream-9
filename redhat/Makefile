@@ -239,7 +239,7 @@ setup-source: dist-git-version-check dist-clean-sources
 		cp $(REDHAT)/$(CHANGELOG_PREV) $(REDHAT)/$(CHANGELOG); \
 	fi
 	@cp $(REDHAT)/$(CHANGELOG) $(SOURCES)/$(CHANGELOG)
-	@$(REDHAT)/genspec.sh $(SOURCES) $(SOURCES)/$(SPECFILE) $(SOURCES)/$(CHANGELOG) $(PKGRELEASE) $(RPMKVERSION) $(RPMKPATCHLEVEL) $(RPMKSUBLEVEL) $(SPECRELEASE) "$(BUILDOPTS)" $(MARKER) `cat $(REDHAT)/marker` $(SINGLE_TARBALL) $(TARFILE_RELEASE) $(SNAPSHOT) $(UPSTREAM_BRANCH) $(INCLUDE_FEDORA_FILES) $(INCLUDE_RHEL_FILES) $(RHEL_MAJOR) $(RHEL_MINOR) $(BUILDID)
+	@$(REDHAT)/genspec.sh
 	@cp $(SOURCES)/$(SPECFILE) $(SOURCES)/../SPECS/
 
 generate-testpatch-tmp:
@@ -560,3 +560,5 @@ dist-full-help:
 	@echo  '                    target used by the current branch/tree.'
 	@echo  '  dist-self-test  - Runs self-tests from the redhat/self-test directory'
 	@echo  ''
+
+export

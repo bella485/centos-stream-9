@@ -4,28 +4,8 @@
 #    SNAPSHOT: indicates whether or not this is based on an upstream tag. 1
 #	indicates it is not, 0 indicates it is.
 
-SOURCES=$1
-SPECFILE=$2
-CHANGELOG=$3
-PKGRELEASE=$4
-KVERSION=$5
-KPATCHLEVEL=$6
-KSUBLEVEL=$7
-SPECRELEASE=$8
-BUILDOPTS=$9
-MARKER=${10}
-LAST_MARKER=${11}
-SINGLE_TARBALL=${12}
-TARFILE_RELEASE=${13}
-SNAPSHOT=${14}
-UPSTREAM_BRANCH=${15}
-INCLUDE_FEDORA_FILES=${16}
-INCLUDE_RHEL_FILES=${17}
-RHEL_MAJOR=${18}
-RHEL_MINOR=${19}
-BUILDID=${20}
-
-RPMVERSION=${KVERSION}.${KPATCHLEVEL}.${KSUBLEVEL}
+LAST_MARKER=$(cat "${REDHAT}"/marker)
+RPMVERSION=${RPMKVERSION}.${RPMKPATCHLEVEL}.${RPMKSUBLEVEL}
 clogf="$SOURCES/changelog"
 # hide [redhat] entries from changelog
 HIDE_REDHAT=1;
@@ -86,7 +66,7 @@ fi
 # This means we need to zap entries that are already present in the changelog.
 if [ "$MARKER" != "$LAST_MARKER" ]; then
 	# awk trick to get all unique lines
-	awk '!seen[$0]++' "$CHANGELOG" "$clogf" > "$clogf.unique"
+	awk '!seen[$0]++' "$SOURCES/$CHANGELOG" "$clogf" > "$clogf.unique"
 	# sed trick to get the end of the changelog minus the line
 	sed -e '1,/# END OF CHANGELOG/ d' "$clogf.unique" > "$clogf.tmp"
 	# Add an explicit entry to indicate a rebase.
@@ -111,11 +91,11 @@ if [ "$LENGTH" = 0 ]; then
 	touch $clogf
 fi
 
-cat "$clogf" "$CHANGELOG" > "$clogf.full"
-mv -f "$clogf.full" "$CHANGELOG"
+cat "$clogf" "$SOURCES/$CHANGELOG" > "$clogf.full"
+mv -f "$clogf.full" "$SOURCES/$CHANGELOG"
 
 # genlog.py generates Resolves lines as well, strip these from RPM changelog
-cat $CHANGELOG | grep -v -e "^Resolves: " > $clogf.stripped
+cat $SOURCES/$CHANGELOG | grep -v -e "^Resolves: " > $clogf.stripped
 
 if [ "$SNAPSHOT" = 0 ]; then
 	# This is based off a tag on Linus's tree (e.g. v5.5 or v5.5-rc5).
@@ -132,20 +112,20 @@ else
 	BUILDID_DEFINE="# define buildid .local"
 fi
 
-test -n "$SPECFILE" &&
-        sed -i -e "
+test -f "$SOURCES/$SPECFILE" &&
+	sed -i -e "
 	/%%CHANGELOG%%/r $clogf.stripped
 	/%%CHANGELOG%%/d
 	s/%%BUILDID%%/$BUILDID_DEFINE/
-	s/%%KVERSION%%/$KVERSION/
-	s/%%KPATCHLEVEL%%/$KPATCHLEVEL/
-	s/%%KSUBLEVEL%%/$KSUBLEVEL/
+	s/%%KVERSION%%/$RPMKVERSION/
+	s/%%KPATCHLEVEL%%/$RPMKPATCHLEVEL/
+	s/%%KSUBLEVEL%%/$RPMKSUBLEVEL/
 	s/%%PKGRELEASE%%/$PKGRELEASE/
 	s/%%SPECRELEASE%%/$SPECRELEASE/
 	s/%%DEBUG_BUILDS_ENABLED%%/$DEBUG_BUILDS_ENABLED/
 	s/%%INCLUDE_FEDORA_FILES%%/$INCLUDE_FEDORA_FILES/
 	s/%%INCLUDE_RHEL_FILES%%/$INCLUDE_RHEL_FILES/
-	s/%%TARBALL_VERSION%%/$TARFILE_RELEASE/" "$SPECFILE"
+	s/%%TARBALL_VERSION%%/$TARFILE_RELEASE/" "$SOURCES/$SPECFILE"
 
 echo "MARKER is $MARKER"
 
@@ -176,7 +156,7 @@ for opt in $BUILDOPTS; do
 	add_opt=
 	[ -z "${opt##+*}" ] && add_opt="_with_${opt#?}"
 	[ -z "${opt##-*}" ] && add_opt="_without_${opt#?}"
-	[ -n "$add_opt" ] && sed -i "s/^\\(# The following build options\\)/%define $add_opt 1\\n\\1/" $SPECFILE
+	[ -n "$add_opt" ] && sed -i "s/^\\(# The following build options\\)/%define $add_opt 1\\n\\1/" $SOURCES/$SPECFILE
 done
 
 rm -f "$clogf"{,.stripped};
