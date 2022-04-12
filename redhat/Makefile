@@ -34,10 +34,12 @@ else
   PREBUILD:=
 endif
 
-ifneq ($(findstring .fc,$(DIST)),)
-  DISTRO ?= fedora
-else
-  DISTRO ?= rhel
+ifndef DISTRO
+  ifneq ($(findstring .fc,$(DIST)),)
+    DISTRO := fedora
+  else
+    DISTRO := rhel
+  endif
 endif
 
 # If USE_DIST_IN_SOURCE == 1, dist tag is added to PKGRELEASE
@@ -119,18 +121,6 @@ SRPMS:=$(RPM)/SRPMS
 SOURCES:=$(RPM)/SOURCES
 TESTPATCH:=$(REDHAT)/linux-kernel-test.patch
 ARCH_LIST=aarch64 ppc64le s390x x86_64
-# Make can't match on a regex to match fc31, fc32 so add another check here
-# A unified tarball means that the tarball in the srpm contains both the
-# upstream sources and redhat patches. A non-unified tarball means that
-# the tarball is only upstream sources and the patches get applied as
-# a diff in the spec file
-ifeq ("$(DIST)", ".elrdy")
-  SINGLE_TARBALL:=0
-else ifeq ("$(DISTRO)", "fedora")
-  SINGLE_TARBALL:=0
-else
-  SINGLE_TARBALL:=1
-endif
 
 STAMP_VERSION:=$(KVERSION)
 
@@ -149,11 +139,30 @@ endif
 PKGRELEASE:=$(PREBUILD)$(BUILD)$(BUILDID)$(SOURCE_DIST)
 SPECRELEASE:=$(PREBUILD)$(BUILD)%{?buildid}%{?dist}
 
-ifeq ("$(SINGLE_TARBALL)", "0")
+ifeq ("$(DISTRO)", "fedora")
+  # A non-unified tarball means that the tarball is only upstream sources
+  # and the patches get applied as a diff in the spec file
+  SINGLE_TARBALL:=0
   TARFILE_RELEASE:=$(UPSTREAM_TARBALL_NAME)
+  RHPRODUCT:=rawhide
+  BUILD_SCRATCH_TARGET ?= temp-ark-rhel-8-test
+else ifeq ("$(DISTRO)", "centos")
+  # A unified tarball means that the tarball in the srpm contains both the
+  # upstream sources and RHEL specific patches.
+  SINGLE_TARBALL:=1
+  RHPRODUCT:=c$(RHEL_MAJOR)s
+  BUILD_PROFILE ?= -p stream
+  BUILD_SCRATCH_TARGET ?= c$(RHEL_MAJOR)s-candidate
+  TARFILE_RELEASE:=$(KVERSION)-$(PKGRELEASE)
 else
+  # A unified tarball means that the tarball in the srpm contains both the
+  # upstream sources and RHEL specific patches.
+  SINGLE_TARBALL:=1
+  RHPRODUCT:=rhel-$(RHEL_MAJOR).$(RHEL_MINOR).0
+  BUILD_SCRATCH_TARGET ?= rhel-$(RHEL_MAJOR).$(RHEL_MINOR).0-test-pesign
   TARFILE_RELEASE:=$(KVERSION)-$(PKGRELEASE)
 endif
+
 TARFILE:=linux-$(TARFILE_RELEASE).tar.xz
 TARBALL:=$(REDHAT)/$(TARFILE)
 KABI_TARFILE:=kernel-abi-stablelists-$(KVERSION)-$(PKGRELEASE).tar.bz2
