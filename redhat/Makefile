@@ -202,16 +202,6 @@ KABIDW_TARBALL:=$(SOURCES)/kernel-kabi-dw-$(KVERSION)-$(PKGRELEASE).tar.bz2
 CHANGELOG:=$(PACKAGE_NAME).changelog-$(RHEL_MAJOR).$(RHEL_MINOR)
 CHANGELOG_PREV:=$(PACKAGE_NAME).changelog-$(RHEL_MAJOR).$(shell expr $(RHEL_MINOR) - 1)
 
-ifeq ("$(DIST)", ".elrdy")
-  RHPRODUCT:=rhel-ready
-else ifeq ("$(DISTRO)", "fedora")
-  RHPRODUCT:=rawhide
-else ifeq ("$(DISTRO)", "centos")
-  RHPRODUCT:=c$(RHEL_MAJOR)s
-else
-  RHPRODUCT:=rhel-$(RHEL_MAJOR).$(RHEL_MINOR).0
-endif
-
 include Makefile.rhpkg
 
 ifeq ("$(ZSTREAM)", "yes")
