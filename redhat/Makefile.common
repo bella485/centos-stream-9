@@ -33,7 +33,6 @@ else
   PREBUILD:=
 endif
 
-DIST ?= .el9
 ifneq ($(findstring .fc,$(DIST)),)
   DISTRO ?= fedora
 else
