@@ -34,8 +34,83 @@ RPMKPATCHLEVEL:=$(shell $(GIT) show $(HEAD):Makefile | sed -ne '/^PATCHLEVEL\ =\
 RPMKSUBLEVEL:=$(shell $(GIT) show $(HEAD):Makefile | sed -ne '/^SUBLEVEL\ =\ /{s///;p;q}')
 RPMKEXTRAVERSION:=$(shell $(GIT) show $(HEAD):Makefile | sed -ne '/^EXTRAVERSION\ =\ /{s///;p;q}')
 GITID:= $(shell $(GIT) log --max-count=1 --pretty=format:%H $(HEAD))
-# marker is git tag which we base off of for exporting patches
-# Make sure marker uses RPMKPATCHLEVEL and RPMKEXTRAVERSION from the kernel
+ifndef BUILD
+  BUILD:=$(RHEL_RELEASE)
+endif
+FLAVOR=
+CURARCH := $(shell uname -m)
+ARCHCONFIG := $(shell uname -m | sed -e s/x86_64/X86_64/ \
+				     -e s/s390x/S390/ -e s/ppc.*/PPC/ )
+
+# rpm information
+SPECFILE:=$(PACKAGE_NAME).spec
+RPM:=$(REDHAT)/rpm
+SRPMS:=$(RPM)/SRPMS
+SOURCES:=$(RPM)/SOURCES
+TESTPATCH:=$(REDHAT)/linux-kernel-test.patch
+CHANGELOG:=$(PACKAGE_NAME).changelog-$(RHEL_MAJOR).$(RHEL_MINOR)
+CHANGELOG_PREV:=$(PACKAGE_NAME).changelog-$(RHEL_MAJOR).$(shell expr $(RHEL_MINOR) - 1)
+ARCH_LIST=aarch64 ppc64le s390x x86_64
+
+ifndef DISTRO
+  ifneq ($(findstring .fc,$(DIST)),)
+    DISTRO := fedora
+  else
+    DISTRO := rhel
+  endif
+endif
+
+ifndef BUILD_FLAGS
+  ifeq ($(filter $(MAKECMDGOALS),dist-brew distg-brew),)
+	BUILD_FLAGS := $(BREW_FLAGS)
+  endif
+  ifeq ($(filter $(MAKECMDGOALS),dist-koji distg-koji),)
+	BUILD_FLAGS := $(KOJI_FLAGS)
+  endif
+  BUILD_FLAGS += $(TEST_FLAGS)
+endif
+
+ifndef RHJOBS
+  RHJOBS=$(shell j=$$(echo $(MAKEFLAGS) | grep -Eo "\ -j[0-9]*" | xargs ); \
+	  if [ -z "$${j}" ]; then \
+	  	echo "1"; \
+	  else \
+	  	j=$$(echo "$${j}" | tr -d "\-j"); \
+	  	[ -z "$${j}" ] && nproc --all || echo $${j}; \
+	  fi)
+endif
+
+LOCVERFILE:=../localversion
+# create an empty localversion file if you don't want a local buildid
+ifneq ($(wildcard $(LOCVERFILE)),)
+  BUILDID:=$(shell cat $(LOCVERFILE))
+  $(info BUILDID is "$(BUILDID)". Update '$(shell dirname $(REDHAT))/localversion' to change.)
+else
+  ifeq ($(BUILDID),)
+    BUILDID:=.test
+  endif
+  $(info BUILDID is "$(BUILDID)".)
+endif
+
+# options for process_configs.sh script
+ifdef NO_CONFIGCHECKS
+   PROCESS_CONFIGS_OPTS=
+   PROCESS_CONFIGS_CHECK_OPTS=
+   BUILDOPTS += -configchecks
+else
+   PROCESS_CONFIGS_CHECK_OPTS=-n -t -c
+   PROCESS_CONFIGS_OPTS=-n -w -c
+endif
+
+# this section is needed in order to make O= to work
+_OUTPUT := ..
+ifeq ("$(origin O)", "command line")
+  _OUTPUT := $(O)
+  _EXTRA_ARGS := O=$(_OUTPUT)
+endif
+
+# MARKER is the git tag which we base off of for exporting patches
+# Make sure MARKER uses RPMKPATCHLEVEL and RPMKEXTRAVERSION from the kernel
 # makefile as opposed to any adjusted version for snapshotting.
 ifneq ($(RPMKEXTRAVERSION),)
   MARKER:=v$(RPMKVERSION).$(RPMKPATCHLEVEL)$(RPMKEXTRAVERSION)
@@ -52,14 +127,6 @@ else
     UPSTREAM_TARBALL_NAME:=$(RPMKVERSION).$(RPMKPATCHLEVEL).$(RPMKSUBLEVEL)
   endif
   PREBUILD:=
-endif
-
-ifndef DISTRO
-  ifneq ($(findstring .fc,$(DIST)),)
-    DISTRO := fedora
-  else
-    DISTRO := rhel
-  endif
 endif
 
 # If USE_DIST_IN_SOURCE == 1, dist tag is added to PKGRELEASE
@@ -126,32 +193,14 @@ ifeq ($(VERSION_ON_UPSTREAM),1)
 endif
 
 KVERSION:=$(RPMKVERSION).$(RPMKPATCHLEVEL).$(RPMKSUBLEVEL)
-
-ifndef BUILD
-  BUILD:=$(RHEL_RELEASE)
-endif
-SPECFILE:=$(PACKAGE_NAME).spec
-RPM:=$(REDHAT)/rpm
-SRPMS:=$(RPM)/SRPMS
-SOURCES:=$(RPM)/SOURCES
-TESTPATCH:=$(REDHAT)/linux-kernel-test.patch
-ARCH_LIST=aarch64 ppc64le s390x x86_64
-
-LOCVERFILE:=../localversion
-# create an empty localversion file if you don't want a local buildid
-ifneq ($(wildcard $(LOCVERFILE)),)
-  BUILDID:=$(shell cat $(LOCVERFILE))
-  $(info BUILDID is "$(BUILDID)". Update '$(shell dirname $(REDHAT))/localversion' to change.)
-else
-  ifeq ($(BUILDID),)
-    BUILDID:=.test
-  endif
-  $(info BUILDID is "$(BUILDID)".)
-endif
-
+DISTRO_BUILD:=$(PREBUILD)$(BUILD)$(BUILDID)$(SOURCE_DIST)
+KABI_TARBALL:=$(SOURCES)/kernel-abi-stablelists-$(KVERSION)-$(DISTRO_BUILD).tar.bz2
+KABIDW := $(REDHAT)/kabi-dwarf
+KABIDW_TARBALL:=$(SOURCES)/kernel-kabi-dw-$(KVERSION)-$(DISTRO_BUILD).tar.bz2
 PKGRELEASE:=$(PREBUILD)$(BUILD)$(BUILDID)$(SOURCE_DIST)
 RPMVERSION=${RPMKVERSION}.${RPMKPATCHLEVEL}.${RPMKSUBLEVEL}-$(PKGRELEASE)
 SPECRELEASE:=$(PREBUILD)$(BUILD)%{?buildid}%{?dist}
+SRPM:=$(SRPMS)/$(PACKAGE_NAME)-$(KVERSION)-$(PKGRELEASE)$(DIST).src.rpm
 
 #
 # This conditional statement is where fedora, centos, and other (aka RHEL)
@@ -195,13 +244,6 @@ endif
 
 TARFILE:=linux-$(TARFILE_RELEASE).tar.xz
 TARBALL:=$(REDHAT)/$(TARFILE)
-DISTRO_BUILD:=$(PREBUILD)$(BUILD)$(BUILDID)$(SOURCE_DIST)
-KABI_TARBALL:=$(SOURCES)/kernel-abi-stablelists-$(KVERSION)-$(DISTRO_BUILD).tar.bz2
-KABIDW := $(REDHAT)/kabi-dwarf
-KABIDW_TARBALL:=$(SOURCES)/kernel-kabi-dw-$(KVERSION)-$(DISTRO_BUILD).tar.bz2
-
-CHANGELOG:=$(PACKAGE_NAME).changelog-$(RHEL_MAJOR).$(RHEL_MINOR)
-CHANGELOG_PREV:=$(PACKAGE_NAME).changelog-$(RHEL_MAJOR).$(shell expr $(RHEL_MINOR) - 1)
 
 include Makefile.rhpkg
 
@@ -245,26 +287,6 @@ ARCHCONFIG := $(shell uname -m | sed -e s/x86_64/X86_64/ \
 				     -e s/s390x/S390/ -e s/ppc.*/PPC/ )
 
 include Makefile.cross
-
-ifndef RHJOBS
-  RHJOBS=$(shell j=$$(echo $(MAKEFLAGS) | grep -Eo "\ -j[0-9]*" | xargs ); \
-	  if [ -z "$${j}" ]; then \
-	  	echo "1"; \
-	  else \
-	  	j=$$(echo "$${j}" | tr -d "\-j"); \
-	  	[ -z "$${j}" ] && nproc --all || echo $${j}; \
-	  fi)
-endif
-
-ifndef BUILD_FLAGS
-  ifeq ($(filter $(MAKECMDGOALS),dist-brew distg-brew),)
-	BUILD_FLAGS := $(BREW_FLAGS)
-  endif
-  ifeq ($(filter $(MAKECMDGOALS),dist-koji distg-koji),)
-	BUILD_FLAGS := $(KOJI_FLAGS)
-  endif
-  BUILD_FLAGS += $(TEST_FLAGS)
-endif
 
 #
 # Targets
