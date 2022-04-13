@@ -1,3 +1,19 @@
+# deprecated variables
+ifdef BREW_FLAGS
+  # deprecated in 9.1
+  $(warning WARNING: BREW_FLAGS will be deprecated in a later release, use BUILD_FLAGS instead.)
+endif
+
+ifdef KOJI_FLAGS
+  # deprecated in 9.1
+  $(warning WARNING: KOJI_FLAGS will be deprecated in a later release, use BUILD_FLAGS instead.)
+endif
+
+ifdef TEST_FLAGS
+  # deprecated in 9.1
+  $(warning WARNING: TEST_FLAGS will be deprecated in a later release, use BUILD_FLAGS instead.)
+endif
+
 include Makefile.variables
 
 LANG=C
