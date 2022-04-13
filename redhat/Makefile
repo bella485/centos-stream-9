@@ -195,9 +195,10 @@ endif
 
 TARFILE:=linux-$(TARFILE_RELEASE).tar.xz
 TARBALL:=$(REDHAT)/$(TARFILE)
-KABI_TARBALL:=$(SOURCES)/kernel-abi-stablelists-$(KVERSION)-$(PKGRELEASE).tar.bz2
+DISTRO_BUILD:=$(PREBUILD)$(BUILD)$(BUILDID)$(SOURCE_DIST)
+KABI_TARBALL:=$(SOURCES)/kernel-abi-stablelists-$(KVERSION)-$(DISTRO_BUILD).tar.bz2
 KABIDW := $(REDHAT)/kabi-dwarf
-KABIDW_TARBALL:=$(SOURCES)/kernel-kabi-dw-$(KVERSION)-$(PKGRELEASE).tar.bz2
+KABIDW_TARBALL:=$(SOURCES)/kernel-kabi-dw-$(KVERSION)-$(DISTRO_BUILD).tar.bz2
 
 CHANGELOG:=$(PACKAGE_NAME).changelog-$(RHEL_MAJOR).$(RHEL_MINOR)
 CHANGELOG_PREV:=$(PACKAGE_NAME).changelog-$(RHEL_MAJOR).$(shell expr $(RHEL_MINOR) - 1)
@@ -418,10 +419,10 @@ dist-tarball: $(TARBALL)
 	@echo "redhat/$(TARFILE)"
 
 dist-kernelrelease:
-	@echo $(PACKAGE_NAME)-$(KVERSION)-$(PKGRELEASE)
+	@echo $(PACKAGE_NAME)-$(KVERSION)-$(DISTRO_BUILD)
 
 dist-kernelversion:
-	@echo $(KVERSION)-$(PKGRELEASE)
+	@echo $(KVERSION)-$(DISTRO_BUILD)
 
 dist-specfile: setup-source
 	@echo $(SOURCES)/$(SPECFILE)
