@@ -5,7 +5,6 @@
 #	indicates it is not, 0 indicates it is.
 
 LAST_MARKER=$(cat "${REDHAT}"/marker)
-RPMVERSION=${RPMKVERSION}.${RPMKPATCHLEVEL}.${RPMKSUBLEVEL}
 clogf="$SOURCES/changelog"
 # hide [redhat] entries from changelog
 HIDE_REDHAT=1;
@@ -14,7 +13,6 @@ HIDE_UNSUPPORTED_ARCH=1;
 # override LC_TIME to avoid date conflicts when building the srpm
 LC_TIME=
 # STAMP=$(echo $MARKER | cut -f 1 -d '-' | sed -e "s/v//"); # unused
-RPM_VERSION="$RPMVERSION-$PKGRELEASE";
 
 # We want to exclude changes in redhat/rhdocs tree from the changelog output.
 # Since the redhat/rhdocs is a separate git subtree, we can exclude the full
@@ -42,7 +40,7 @@ echo "Gathering new log entries since $lasttag"
 
 cname="$(git var GIT_COMMITTER_IDENT |sed 's/>.*/>/')"
 cdate="$(LC_ALL=C date +"%a %b %d %Y")"
-cversion="[$RPM_VERSION]";
+cversion="[$RPMVERSION]";
 echo "* $cdate $cname $cversion" > "$clogf"
 
 UPSTREAM="$(git rev-parse -q --verify origin/$UPSTREAM_BRANCH || \
@@ -142,10 +140,10 @@ if [ "$SINGLE_TARBALL" = 0 ]; then
 	# May need to preserve word splitting in EXCLUDE_FILES
 	# shellcheck disable=SC2086
 	git diff -p --no-renames --stat "$MARKER"..  $EXCLUDE_FILES \
-		> "$SOURCES"/patch-"$RPMVERSION"-redhat.patch
+		> "$SOURCES"/patch-"${RPMKVERSION}.${RPMKPATCHLEVEL}.${RPMKSUBLEVEL}"-redhat.patch
 else
 	# Need an empty file for dist-git compatibility
-	touch "$SOURCES"/patch-"$RPMVERSION"-redhat.patch
+	touch "$SOURCES"/patch-"${RPMKVERSION}.${RPMKPATCHLEVEL}.${RPMKSUBLEVEL}"-redhat.patch
 fi
 
 # don't generate Patchlist.changelog file for RHEL
