@@ -60,7 +60,8 @@ for opt in $BUILDOPTS; do
 done
 
 # The self-test data doesn't currently have tests for the changelog or patch file, so the
-# rest of the script can be ignored.
+# rest of the script can be ignored.  See redhat/Makefile setup-source target for related
+# test changes.
 [ -n "$RHSELFTESTDATA" ] && exit 0
 
 # We want to exclude changes in redhat/rhdocs tree from the changelog output.
