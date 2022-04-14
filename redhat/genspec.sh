@@ -19,7 +19,7 @@ LC_TIME=
 # list of commits with "^" specifier against latest child from the subtree.
 # This is done this way to be compatible with old git versions which do not
 # have the pathspec '(exclude)' support
-EXCLUDE=$(git log -1 --format=%P ${0%/*}/rhdocs | cut -d ' ' -f 2)
+EXCLUDE=$(git log -1 --format=%P "${0%/*}"/rhdocs | cut -d ' ' -f 2)
 
 GIT_FORMAT="--format=- %s (%an)%n%N%n^^^NOTES-END^^^%n%b"
 GIT_NOTES="--notes=refs/notes/${RHEL_MAJOR}.${RHEL_MINOR}*"
@@ -43,11 +43,11 @@ cdate="$(LC_ALL=C date +"%a %b %d %Y")"
 cversion="[$RPMVERSION]";
 echo "* $cdate $cname $cversion" > "$clogf"
 
-UPSTREAM="$(git rev-parse -q --verify origin/$UPSTREAM_BRANCH || \
-          git rev-parse -q --verify $UPSTREAM_BRANCH)"
- 
-git log --topo-order --no-merges -z $GIT_NOTES "$GIT_FORMAT" \
-	^${UPSTREAM} ${EXCLUDE:+^$EXCLUDE} "$lasttag".. | ${0%/*}/genlog.py >> "$clogf"
+UPSTREAM="$(git rev-parse -q --verify origin/"$UPSTREAM_BRANCH" || \
+          git rev-parse -q --verify "$UPSTREAM_BRANCH")"
+
+git log --topo-order --no-merges -z "$GIT_NOTES" "$GIT_FORMAT" \
+	^"${UPSTREAM}" ${EXCLUDE:+^$EXCLUDE} "$lasttag".. | "${0%/*}"/genlog.py >> "$clogf"
 
 if [ "$HIDE_REDHAT" = "1" ]; then
 	grep -v -e "^- \[redhat\]" "$clogf" |
@@ -83,17 +83,18 @@ fi
 
 # during rh-dist-git genspec runs again and generates empty changelog
 # create empty file to avoid adding extra header to changelog
-LENGTH=$(grep "^-" $clogf | wc -l | awk '{print $1}')
+LENGTH=$(grep -c "^-" "$clogf" | awk '{print $1}')
 if [ "$LENGTH" = 0 ]; then
-	rm -f $clogf
-	touch $clogf
+	rm -f "$clogf"
+	touch "$clogf"
 fi
 
 cat "$clogf" "$SOURCES/$CHANGELOG" > "$clogf.full"
 mv -f "$clogf.full" "$SOURCES/$CHANGELOG"
 
 # genlog.py generates Resolves lines as well, strip these from RPM changelog
-cat $SOURCES/$CHANGELOG | grep -v -e "^Resolves: " > $clogf.stripped
+# shellcheck disable=SC2002
+cat "$SOURCES/$CHANGELOG" | grep -v -e "^Resolves: " > "$clogf".stripped
 
 if [ "$SNAPSHOT" = 0 ]; then
 	# This is based off a tag on Linus's tree (e.g. v5.5 or v5.5-rc5).
@@ -141,10 +142,10 @@ if [ "$SINGLE_TARBALL" = 0 ]; then
 	# May need to preserve word splitting in EXCLUDE_FILES
 	# shellcheck disable=SC2086
 	git diff -p --no-renames --stat "$MARKER"..  $EXCLUDE_FILES \
-		> "$SOURCES"/patch-"${RPMKVERSION}.${RPMKPATCHLEVEL}.${RPMKSUBLEVEL}"-redhat.patch
+		> "$SOURCES/patch-${RPMKVERSION}.${RPMKPATCHLEVEL}.${RPMKSUBLEVEL}"-redhat.patch
 else
 	# Need an empty file for dist-git compatibility
-	touch "$SOURCES"/patch-"${RPMKVERSION}.${RPMKPATCHLEVEL}.${RPMKSUBLEVEL}"-redhat.patch
+	touch "$SOURCES/patch-${RPMKVERSION}.${RPMKPATCHLEVEL}.${RPMKSUBLEVEL}"-redhat.patch
 fi
 
 # don't generate Patchlist.changelog file for RHEL
