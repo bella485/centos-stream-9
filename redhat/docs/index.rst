@@ -89,6 +89,7 @@ Contributor Guide
 
    repository-layout
    submitting-contributions
+   makefile-changes
 
 
 Maintainer Guide
