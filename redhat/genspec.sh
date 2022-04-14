@@ -14,6 +14,55 @@ HIDE_UNSUPPORTED_ARCH=1;
 LC_TIME=
 # STAMP=$(echo $MARKER | cut -f 1 -d '-' | sed -e "s/v//"); # unused
 
+UPSTREAM="$(git rev-parse -q --verify origin/"$UPSTREAM_BRANCH" || \
+          git rev-parse -q --verify "$UPSTREAM_BRANCH")"
+
+if [ "$SNAPSHOT" = 0 ]; then
+	# This is based off a tag on Linus's tree (e.g. v5.5 or v5.5-rc5).
+	# Two kernels are built, one with debug configuration and one without.
+	DEBUG_BUILDS_ENABLED=1
+else
+	# All kernels are built with debug configurations.
+	DEBUG_BUILDS_ENABLED=0
+fi
+
+if [ -n "$BUILDID" ]; then
+	BUILDID_DEFINE=$(printf "%%define buildid %s" "$BUILDID")
+else
+	BUILDID_DEFINE="# define buildid .local"
+fi
+
+test -f "$SOURCES/$SPECFILE" &&
+	sed -i -e "
+	/%%CHANGELOG%%/r $clogf.stripped
+	/%%CHANGELOG%%/d
+	s/%%BUILDID%%/$BUILDID_DEFINE/
+	s/%%RPMKVERSION%%/$RPMKVERSION/
+	s/%%RPMKPATCHLEVEL%%/$RPMKPATCHLEVEL/
+	s/%%RPMKSUBLEVEL%%/$RPMKSUBLEVEL/
+	s/%%PKGRELEASE%%/$PKGRELEASE/
+	s/%%SPECRELEASE%%/$SPECRELEASE/
+	s/%%DISTRO_BUILD%%/$DISTRO_BUILD/
+	s/%%DEBUG_BUILDS_ENABLED%%/$DEBUG_BUILDS_ENABLED/
+	s/%%INCLUDE_FEDORA_FILES%%/$INCLUDE_FEDORA_FILES/
+	s/%%INCLUDE_RHEL_FILES%%/$INCLUDE_RHEL_FILES/
+	s/%%TARFILE_RELEASE%%/$TARFILE_RELEASE/" "$SOURCES/$SPECFILE"
+
+# don't generate Patchlist.changelog file for RHEL
+
+# We depend on work splitting of BUILDOPTS
+# shellcheck disable=SC2086
+for opt in $BUILDOPTS; do
+	add_opt=
+	[ -z "${opt##+*}" ] && add_opt="_with_${opt#?}"
+	[ -z "${opt##-*}" ] && add_opt="_without_${opt#?}"
+	[ -n "$add_opt" ] && sed -i "s/^\\(# The following build options\\)/%define $add_opt 1\\n\\1/" $SOURCES/$SPECFILE
+done
+
+# The self-test data doesn't currently have tests for the changelog or patch file, so the
+# rest of the script can be ignored.
+[ -n "$RHSELFTESTDATA" ] && exit 0
+
 # We want to exclude changes in redhat/rhdocs tree from the changelog output.
 # Since the redhat/rhdocs is a separate git subtree, we can exclude the full
 # list of commits with "^" specifier against latest child from the subtree.
@@ -42,9 +91,6 @@ cname="$(git var GIT_COMMITTER_IDENT |sed 's/>.*/>/')"
 cdate="$(LC_ALL=C date +"%a %b %d %Y")"
 cversion="[$RPMVERSION]";
 echo "* $cdate $cname $cversion" > "$clogf"
-
-UPSTREAM="$(git rev-parse -q --verify origin/"$UPSTREAM_BRANCH" || \
-          git rev-parse -q --verify "$UPSTREAM_BRANCH")"
 
 git log --topo-order --no-merges -z "$GIT_NOTES" "$GIT_FORMAT" \
 	^"${UPSTREAM}" ${EXCLUDE:+^$EXCLUDE} "$lasttag".. | "${0%/*}"/genlog.py >> "$clogf"
@@ -96,37 +142,6 @@ mv -f "$clogf.full" "$SOURCES/$CHANGELOG"
 # shellcheck disable=SC2002
 cat "$SOURCES/$CHANGELOG" | grep -v -e "^Resolves: " > "$clogf".stripped
 
-if [ "$SNAPSHOT" = 0 ]; then
-	# This is based off a tag on Linus's tree (e.g. v5.5 or v5.5-rc5).
-	# Two kernels are built, one with debug configuration and one without.
-	DEBUG_BUILDS_ENABLED=1
-else
-	# All kernels are built with debug configurations.
-	DEBUG_BUILDS_ENABLED=0
-fi
-
-if [ -n "$BUILDID" ]; then
-	BUILDID_DEFINE=$(printf "%%define buildid %s" "$BUILDID")
-else
-	BUILDID_DEFINE="# define buildid .local"
-fi
-
-test -f "$SOURCES/$SPECFILE" &&
-	sed -i -e "
-	/%%CHANGELOG%%/r $clogf.stripped
-	/%%CHANGELOG%%/d
-	s/%%BUILDID%%/$BUILDID_DEFINE/
-	s/%%RPMKVERSION%%/$RPMKVERSION/
-	s/%%RPMKPATCHLEVEL%%/$RPMKPATCHLEVEL/
-	s/%%RPMKSUBLEVEL%%/$RPMKSUBLEVEL/
-	s/%%PKGRELEASE%%/$PKGRELEASE/
-	s/%%SPECRELEASE%%/$SPECRELEASE/
-	s/%%DISTRO_BUILD%%/$DISTRO_BUILD/
-	s/%%DEBUG_BUILDS_ENABLED%%/$DEBUG_BUILDS_ENABLED/
-	s/%%INCLUDE_FEDORA_FILES%%/$INCLUDE_FEDORA_FILES/
-	s/%%INCLUDE_RHEL_FILES%%/$INCLUDE_RHEL_FILES/
-	s/%%TARFILE_RELEASE%%/$TARFILE_RELEASE/" "$SOURCES/$SPECFILE"
-
 echo "MARKER is $MARKER"
 
 EXCLUDE_FILES=":(exclude,top).get_maintainer.conf \
@@ -147,16 +162,5 @@ else
 	# Need an empty file for dist-git compatibility
 	touch "$SOURCES/patch-${RPMKVERSION}.${RPMKPATCHLEVEL}.${RPMKSUBLEVEL}"-redhat.patch
 fi
-
-# don't generate Patchlist.changelog file for RHEL
-
-# We depend on work splitting of BUILDOPTS
-# shellcheck disable=SC2086
-for opt in $BUILDOPTS; do
-	add_opt=
-	[ -z "${opt##+*}" ] && add_opt="_with_${opt#?}"
-	[ -z "${opt##-*}" ] && add_opt="_without_${opt#?}"
-	[ -n "$add_opt" ] && sed -i "s/^\\(# The following build options\\)/%define $add_opt 1\\n\\1/" $SOURCES/$SPECFILE
-done
 
 rm -f "$clogf"{,.stripped};
