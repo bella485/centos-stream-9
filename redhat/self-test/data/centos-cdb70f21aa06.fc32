@@ -91,7 +91,6 @@ BUILD_TARGET=--scratch rhel-9.1.0-test-pesign
 BUILD_PROFILE=
 BUILD_FLAGS=
 BUILD=78
-RHGITURL=git@gitlab.com:redhat/centos-stream/src/kernel/centos-stream-9.git
 RHGITCOMMIT=HEAD
 RHJOBS=1
 NO_CONFIGCHECKS=
