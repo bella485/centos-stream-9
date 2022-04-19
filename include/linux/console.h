@@ -151,6 +151,8 @@ struct console {
 	int	cflag;
 	u64	seq;
 	unsigned long dropped;
+	struct task_struct *thread;
+
 	void	*data;
 	struct	 console *next;
 };
