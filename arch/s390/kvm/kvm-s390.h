@@ -105,7 +105,7 @@ static inline void kvm_s390_set_prefix(struct kvm_vcpu *vcpu, u32 prefix)
 		   prefix);
 	vcpu->arch.sie_block->prefix = prefix >> GUEST_PREFIX_SHIFT;
 	kvm_make_request(KVM_REQ_TLB_FLUSH, vcpu);
-	kvm_make_request(KVM_REQ_MMU_RELOAD, vcpu);
+	kvm_make_request(KVM_REQ_REFRESH_GUEST_PREFIX, vcpu);
 }
 
 static inline u64 kvm_s390_get_base_disp_s(struct kvm_vcpu *vcpu, u8 *ar)
@@ -206,6 +206,29 @@ static inline int test_kvm_cpu_feat(struct kvm *kvm, unsigned long nr)
 static inline int kvm_s390_user_cpu_state_ctrl(struct kvm *kvm)
 {
 	return kvm->arch.user_cpu_state_ctrl != 0;
+}
+
+static inline void kvm_s390_set_user_cpu_state_ctrl(struct kvm *kvm)
+{
+	if (kvm->arch.user_cpu_state_ctrl)
+		return;
+
+	VM_EVENT(kvm, 3, "%s", "ENABLE: Userspace CPU state control");
+	kvm->arch.user_cpu_state_ctrl = 1;
+}
+
+/* get the end gfn of the last (highest gfn) memslot */
+static inline unsigned long kvm_s390_get_gfn_end(struct kvm_memslots *slots)
+{
+	struct rb_node *node;
+	struct kvm_memory_slot *ms;
+
+	if (WARN_ON(kvm_memslots_empty(slots)))
+		return 0;
+
+	node = rb_last(&slots->gfn_tree);
+	ms = container_of(node, struct kvm_memory_slot, gfn_node[slots->node_idx]);
+	return ms->base_gfn + ms->npages;
 }
 
 static inline u32 kvm_s390_get_gisa_desc(struct kvm *kvm)
@@ -357,7 +380,7 @@ int kvm_s390_handle_diag(struct kvm_vcpu *vcpu);
 
 static inline void kvm_s390_vcpu_block_all(struct kvm *kvm)
 {
-	int i;
+	unsigned long i;
 	struct kvm_vcpu *vcpu;
 
 	WARN_ON(!mutex_is_locked(&kvm->lock));
@@ -367,7 +390,7 @@ static inline void kvm_s390_vcpu_block_all(struct kvm *kvm)
 
 static inline void kvm_s390_vcpu_unblock_all(struct kvm *kvm)
 {
-	int i;
+	unsigned long i;
 	struct kvm_vcpu *vcpu;
 
 	kvm_for_each_vcpu(i, vcpu, kvm)
