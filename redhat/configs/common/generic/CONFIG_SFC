@@ -1,1 +1,1 @@
-# CONFIG_SFC is not set
+CONFIG_SFC=m
