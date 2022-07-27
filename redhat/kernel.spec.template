@@ -2634,7 +2634,7 @@ then\
 fi\
 %if %{with_cross}\
     echo "Building scripts"\
-    make -C /usr/src/kernels/%{KVERREL}%{?1:+%{1}} prepare_after_cross\
+    env --unset=ARCH make -C /usr/src/kernels/%{KVERREL}%{?1:+%{1}} prepare_after_cross\
 %endif\
 %{nil}
 
