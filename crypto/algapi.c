@@ -229,6 +229,14 @@ static struct crypto_larval *crypto_alloc_test_larval(struct crypto_alg *alg)
 		return larval;
 
 	larval->adult = crypto_mod_get(alg);
+
+	if (larval->adult)
+	printk("alloc_test_larval: adult = crypto_mod_get: alg %s (%px) adult %s (%px)\n",
+			(alg->cra_name?alg->cra_name:"NULL"), alg,
+			(larval->adult->cra_name?larval->adult->cra_name:"NULL"), larval->adult);
+	else
+	printk("alloc_test_larval: adult = crypto_mod_get: larval->adult NULL\n");
+
 	if (!larval->adult) {
 		kfree(larval);
 		return ERR_PTR(-ENOENT);
@@ -374,8 +382,9 @@ found:
 			if ((q->cra_flags ^ alg->cra_flags) & larval->mask)
 				continue;
 
-			if (best && crypto_mod_get(alg))
-				larval->adult = alg;
+			if (best && crypto_mod_get(alg)) {
+				printk("crypto_alg_tested: adult = alg: %s (%px)\n", (alg->cra_name?alg->cra_name:"NULL"), alg);
+				larval->adult = alg; }
 			else
 				larval->adult = ERR_PTR(-EAGAIN);
 
