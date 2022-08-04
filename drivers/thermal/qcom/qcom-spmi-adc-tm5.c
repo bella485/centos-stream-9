@@ -212,7 +212,7 @@ static irqreturn_t adc_tm5_isr(int irq, void *data)
 
 static int adc_tm5_get_temp(void *data, int *temp)
 {
-	struct adc_tm5_channel *channel = data;
+	struct adc_tm5_channel *channel = tz->devdata;
 	int ret;
 
 	if (!channel || !channel->iio)
@@ -322,7 +322,7 @@ static int adc_tm5_configure(struct adc_tm5_channel *channel, int low, int high)
 
 static int adc_tm5_set_trips(void *data, int low, int high)
 {
-	struct adc_tm5_channel *channel = data;
+	struct adc_tm5_channel *channel = tz->devdata;
 	struct adc_tm5_chip *chip;
 	int ret;
 
