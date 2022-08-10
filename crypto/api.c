@@ -205,11 +205,15 @@ static struct crypto_alg *crypto_larval_wait(struct crypto_alg *alg)
 	struct crypto_larval *larval = (void *)alg;
 	long timeout;
 
+	printk("larval_wait: BEFORE: larval %px adult %px\n", larval, larval->adult);
+
 	if (!static_branch_likely(&crypto_boot_test_finished))
 		crypto_start_test(larval);
 
 	timeout = wait_for_completion_killable_timeout(
 		&larval->completion, 60 * HZ);
+
+	printk("larval_wait: AFTER:  larval %px adult %px\n", larval, larval->adult);
 
 	alg = larval->adult;
 	if (timeout < 0)
@@ -223,6 +227,8 @@ static struct crypto_alg *crypto_larval_wait(struct crypto_alg *alg)
 	else if (crypto_is_test_larval(larval) &&
 		 !(alg->cra_flags & CRYPTO_ALG_TESTED))
 		alg = ERR_PTR(-EAGAIN);
+	else if (alg->cra_flags & CRYPTO_ALG_FIPS_INTERNAL)
+		alg = ERR_PTR(-EAGAIN);
 	else if (!crypto_mod_get(alg))
 		alg = ERR_PTR(-EAGAIN);
 	crypto_mod_put(&larval->alg);
@@ -233,6 +239,7 @@ static struct crypto_alg *crypto_larval_wait(struct crypto_alg *alg)
 static struct crypto_alg *crypto_alg_lookup(const char *name, u32 type,
 					    u32 mask)
 {
+	const u32 fips = CRYPTO_ALG_FIPS_INTERNAL;
 	struct crypto_alg *alg;
 	u32 test = 0;
 
@@ -240,8 +247,20 @@ static struct crypto_alg *crypto_alg_lookup(const char *name, u32 type,
 		test |= CRYPTO_ALG_TESTED;
 
 	down_read(&crypto_alg_sem);
-	alg = __crypto_alg_lookup(name, type | test, mask | test);
-	if (!alg && test) {
+	alg = __crypto_alg_lookup(name, (type | test) & ~fips,
+				  (mask | test) & ~fips);
+	if (alg) {
+		if (((type | mask) ^ fips) & fips)
+			mask |= fips;
+		mask &= fips;
+
+		if (!crypto_is_larval(alg) &&
+		    ((type ^ alg->cra_flags) & mask)) {
+			/* Algorithm is disallowed in FIPS mode. */
+			crypto_mod_put(alg);
+			alg = ERR_PTR(-ENOENT);
+		}
+	} else if (test) {
 		alg = __crypto_alg_lookup(name, type, mask);
 		if (alg && !crypto_is_larval(alg)) {
 			/* Test failed */
@@ -315,13 +334,17 @@ struct crypto_alg *crypto_alg_mod_lookup(const char *name, u32 type, u32 mask)
 		mask |= CRYPTO_ALG_INTERNAL;
 
 	larval = crypto_larval_lookup(name, type, mask);
+	printk("alg_mod_lookup: larval_lookup: name %s type %x mask %x ret %ld(%lx)\n",
+			(name==NULL?"NULL":name), type, mask, (long int)larval, (long int)larval);
 	if (IS_ERR(larval) || !crypto_is_larval(larval))
 		return larval;
 
 	ok = crypto_probing_notify(CRYPTO_MSG_ALG_REQUEST, larval);
 
-	if (ok == NOTIFY_STOP)
+	if (ok == NOTIFY_STOP) {
 		alg = crypto_larval_wait(larval);
+		printk("alg_mod_lookup: NOTIFY_STOP: name %s type %x mask %x ok %d(%x) alg %ld(%lx)\n",
+				(name==NULL?"NULL":name), type, mask, ok, ok, (long int)alg, (long int)alg); }
 	else {
 		crypto_mod_put(larval);
 		alg = ERR_PTR(-ENOENT);

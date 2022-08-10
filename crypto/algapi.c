@@ -229,6 +229,14 @@ static struct crypto_larval *crypto_alloc_test_larval(struct crypto_alg *alg)
 		return larval;
 
 	larval->adult = crypto_mod_get(alg);
+
+	if (larval->adult)
+	printk("alloc_test_larval: adult = crypto_mod_get: alg %s (%px) adult %s (%px)\n",
+			(alg->cra_name?alg->cra_name:"NULL"), alg,
+			(larval->adult->cra_name?larval->adult->cra_name:"NULL"), larval->adult);
+	else
+	printk("alloc_test_larval: adult = crypto_mod_get: larval->adult NULL\n");
+
 	if (!larval->adult) {
 		kfree(larval);
 		return ERR_PTR(-ENOENT);
@@ -322,8 +330,16 @@ void crypto_alg_tested(const char *name, int err)
 found:
 	q->cra_flags |= CRYPTO_ALG_DEAD;
 	alg = test->adult;
-	if (err || list_empty(&alg->cra_list))
+
+	if (list_empty(&alg->cra_list))
 		goto complete;
+
+	if (err == -ECANCELED)
+		alg->cra_flags |= CRYPTO_ALG_FIPS_INTERNAL;
+	else if (err)
+		goto complete;
+	else
+		alg->cra_flags &= ~CRYPTO_ALG_FIPS_INTERNAL;
 
 	alg->cra_flags |= CRYPTO_ALG_TESTED;
 
@@ -366,8 +382,9 @@ found:
 			if ((q->cra_flags ^ alg->cra_flags) & larval->mask)
 				continue;
 
-			if (best && crypto_mod_get(alg))
-				larval->adult = alg;
+			if (best && crypto_mod_get(alg)) {
+				printk("crypto_alg_tested: adult = alg: %s (%px)\n", (alg->cra_name?alg->cra_name:"NULL"), alg);
+				larval->adult = alg; }
 			else
 				larval->adult = ERR_PTR(-EAGAIN);
 
@@ -604,6 +621,7 @@ int crypto_register_instance(struct crypto_template *tmpl,
 {
 	struct crypto_larval *larval;
 	struct crypto_spawn *spawn;
+	u32 fips_internal = 0;
 	int err;
 
 	err = crypto_check_alg(&inst->alg);
@@ -626,10 +644,14 @@ int crypto_register_instance(struct crypto_template *tmpl,
 		spawn->inst = inst;
 		spawn->registered = true;
 
+		fips_internal |= spawn->alg->cra_flags;
+
 		crypto_mod_put(spawn->alg);
 
 		spawn = next;
 	}
+
+	inst->alg.cra_flags |= (fips_internal & CRYPTO_ALG_FIPS_INTERNAL);
 
 	larval = __crypto_register_alg(&inst->alg);
 	if (IS_ERR(larval))
@@ -683,7 +705,8 @@ int crypto_grab_spawn(struct crypto_spawn *spawn, struct crypto_instance *inst,
 	if (IS_ERR(name))
 		return PTR_ERR(name);
 
-	alg = crypto_find_alg(name, spawn->frontend, type, mask);
+	alg = crypto_find_alg(name, spawn->frontend,
+			      type | CRYPTO_ALG_FIPS_INTERNAL, mask);
 	if (IS_ERR(alg))
 		return PTR_ERR(alg);
 
