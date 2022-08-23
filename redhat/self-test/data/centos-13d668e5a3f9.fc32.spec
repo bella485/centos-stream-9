@@ -4,9 +4,9 @@
 # here before the %%install macro is pre-built.
 
 # Include Fedora files
-%global include_fedora %%INCLUDE_FEDORA_FILES%%
+%global include_fedora 0
 # Include RHEL files
-%global include_rhel %%INCLUDE_RHEL_FILES%%
+%global include_rhel 1
 
 # Disable LTO in userspace packages.
 %global _lto_cflags %{nil}
@@ -77,9 +77,9 @@ Summary: The Linux kernel
 # Set debugbuildsenabled to 0 to not build a separate debug kernel, but
 #  to build the base kernel using the debug configuration. (Specifying
 #  the --with-release option overrides this setting.)
-%define debugbuildsenabled %%DEBUG_BUILDS_ENABLED%%
+%define debugbuildsenabled 0
 
-%global distro_build %%DISTRO_BUILD%%
+%global distro_build 78.test.fc32
 
 %if 0%{?fedora}
 %define secure_boot_arch x86_64
@@ -110,7 +110,7 @@ Summary: The Linux kernel
 %global zcpu `nproc --all`
 %endif
 
-%%BUILDID%%
+%define buildid .test
 
 
 %if 0%{?fedora}
@@ -120,16 +120,16 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion %%RPMKVERSION%%.%%RPMKPATCHLEVEL%%
+%define kversion 5.14
 
-%define rpmversion %%RPMKVERSION%%.%%RPMKPATCHLEVEL%%.%%RPMKSUBLEVEL%%
-%define pkgrelease %%PKGRELEASE%%
+%define rpmversion 5.14.0
+%define pkgrelease 78.test.fc32
 
 # This is needed to do merge window version magic
-%define patchlevel %%RPMKPATCHLEVEL%%
+%define patchlevel 14
 
 # allow pkg_release to have configurable %%{?dist} tag
-%define specrelease %%SPECRELEASE%%
+%define specrelease 78%{?buildid}%{?dist}
 
 %define pkg_release %{specrelease}
 
@@ -586,7 +586,7 @@ BuildRequires: sparse
 BuildRequires: zlib-devel binutils-devel newt-devel perl(ExtUtils::Embed) bison flex xz-devel
 BuildRequires: audit-libs-devel
 BuildRequires: java-devel
-BuildRequires: libbpf-devel >= 0.6.0-1
+BuildRequires: libbpf-devel
 BuildRequires: libbabeltrace-devel
 BuildRequires: libtraceevent-devel
 %ifnarch %{arm} s390x
@@ -601,9 +601,6 @@ BuildRequires: gettext ncurses-devel
 BuildRequires: libcap-devel libcap-ng-devel
 %ifnarch s390x
 BuildRequires: pciutils-devel
-%endif
-%ifarch i686 x86_64
-BuildRequires: libnl3-devel
 %endif
 %endif
 %if %{with_tools} || %{signmodules} || %{signkernel}
@@ -681,7 +678,7 @@ BuildRequires: lld
 # exact git commit you can run
 #
 # xzcat -qq ${TARBALL} | git get-tar-commit-id
-Source0: linux-%%TARFILE_RELEASE%%.tar.xz
+Source0: linux-5.14.0-78.test.fc32.tar.xz
 
 Source1: Makefile.rhelver
 
@@ -708,7 +705,7 @@ Source1: Makefile.rhelver
 %define pesign_name_0 redhatsecureboot302
 %endif
 %ifarch ppc64le
-%define pesign_name_0 redhatsecureboot701
+%define pesign_name_0 redhatsecureboot601
 %endif
 %endif
 
@@ -833,14 +830,12 @@ The kernel meta package
 
 #
 # This macro does requires, provides, conflicts, obsoletes for a kernel package.
-#	%%kernel_reqprovconf [-o] <subpackage>
+#	%%kernel_reqprovconf <subpackage>
 # It uses any kernel_<subpackage>_conflicts and kernel_<subpackage>_obsoletes
 # macros defined above.
 #
-%define kernel_reqprovconf(o) \
-%if %{-o:0}%{!-o:1}\
+%define kernel_reqprovconf \
 Provides: kernel = %{rpmversion}-%{pkg_release}\
-%endif\
 Provides: kernel-%{_target_cpu} = %{rpmversion}-%{pkg_release}%{?1:+%{1}}\
 Provides: kernel-drm-nouveau = 16\
 Provides: kernel-uname-r = %{KVERREL}%{?1:+%{1}}\
@@ -995,7 +990,7 @@ This package provides debug information for package kernel-tools.
 # symlinks because of the trailing nonmatching alternation and
 # the leading .*, because of find-debuginfo.sh's buggy handling
 # of matching the pattern against the symlinks file.
-%{expand:%%global _find_debuginfo_opts %{?_find_debuginfo_opts} -p '.*%%{_bindir}/centrino-decode(\.debug)?|.*%%{_bindir}/powernow-k8-decode(\.debug)?|.*%%{_bindir}/cpupower(\.debug)?|.*%%{_libdir}/libcpupower.*|.*%%{_bindir}/turbostat(\.debug)?|.*%%{_bindir}/x86_energy_perf_policy(\.debug)?|.*%%{_bindir}/tmon(\.debug)?|.*%%{_bindir}/lsgpio(\.debug)?|.*%%{_bindir}/gpio-hammer(\.debug)?|.*%%{_bindir}/gpio-event-mon(\.debug)?|.*%%{_bindir}/gpio-watch(\.debug)?|.*%%{_bindir}/iio_event_monitor(\.debug)?|.*%%{_bindir}/iio_generic_buffer(\.debug)?|.*%%{_bindir}/lsiio(\.debug)?|.*%%{_bindir}/intel-speed-select(\.debug)?|.*%%{_bindir}/page_owner_sort(\.debug)?|.*%%{_bindir}/slabinfo(\.debug)?|.*%%{_sbindir}/intel_sdsi(\.debug)?|XXX' -o kernel-tools-debuginfo.list}
+%{expand:%%global _find_debuginfo_opts %{?_find_debuginfo_opts} -p '.*%%{_bindir}/centrino-decode(\.debug)?|.*%%{_bindir}/powernow-k8-decode(\.debug)?|.*%%{_bindir}/cpupower(\.debug)?|.*%%{_libdir}/libcpupower.*|.*%%{_bindir}/turbostat(\.debug)?|.*%%{_bindir}/x86_energy_perf_policy(\.debug)?|.*%%{_bindir}/tmon(\.debug)?|.*%%{_bindir}/lsgpio(\.debug)?|.*%%{_bindir}/gpio-hammer(\.debug)?|.*%%{_bindir}/gpio-event-mon(\.debug)?|.*%%{_bindir}/gpio-watch(\.debug)?|.*%%{_bindir}/iio_event_monitor(\.debug)?|.*%%{_bindir}/iio_generic_buffer(\.debug)?|.*%%{_bindir}/lsiio(\.debug)?|.*%%{_bindir}/intel-speed-select(\.debug)?|.*%%{_bindir}/page_owner_sort(\.debug)?|.*%%{_bindir}/slabinfo(\.debug)?|XXX' -o kernel-tools-debuginfo.list}
 
 # with_tools
 %endif
@@ -1084,7 +1079,7 @@ AutoReqProv: no\
 %description %{?1:%{1}-}debuginfo\
 This package provides debug information for package %{name}%{?1:-%{1}}.\
 This is required to use SystemTap with %{name}%{?1:-%{1}}-%{KVERREL}.\
-%{expand:%%global _find_debuginfo_opts %{?_find_debuginfo_opts} --keep-section '.BTF' -p '.*\/usr\/src\/kernels/.*|XXX' -o ignored-debuginfo.list -p '/.*/%%{KVERREL_RE}%{?1:[+]%{1}}/.*|/.*%%{KVERREL_RE}%{?1:\+%{1}}(\.debug)?' -o debuginfo%{?1}.list}\
+%{expand:%%global _find_debuginfo_opts %{?_find_debuginfo_opts} -p '.*\/usr\/src\/kernels/.*|XXX' -o ignored-debuginfo.list -p '/.*/%%{KVERREL_RE}%{?1:[+]%{1}}/.*|/.*%%{KVERREL_RE}%{?1:\+%{1}}(\.debug)?' -o debuginfo%{?1}.list}\
 %{nil}
 
 #
@@ -1225,9 +1220,9 @@ The meta-package for the %{1} kernel\
 #
 # This macro creates a kernel-<subpackage> and its -devel and -debuginfo too.
 #	%%define variant_summary The Linux kernel compiled for <configuration>
-#	%%kernel_variant_package [-n <pretty-name>] [-m] [-o] <subpackage>
+#	%%kernel_variant_package [-n <pretty-name>] [-m] <subpackage>
 #
-%define kernel_variant_package(n:mo) \
+%define kernel_variant_package(n:m) \
 %package %{?1:%{1}-}core\
 Summary: %{variant_summary}\
 Provides: kernel-%{?1:%{1}-}core-uname-r = %{KVERREL}%{?1:+%{1}}\
@@ -1235,7 +1230,7 @@ Provides: installonlypkg(kernel)\
 %if %{-m:1}%{!-m:0}\
 Requires: kernel-core-uname-r = %{KVERREL}\
 %endif\
-%{expand:%%kernel_reqprovconf %{?1:%{1}} %{-o:%{-o}}}\
+%{expand:%%kernel_reqprovconf}\
 %if %{?1:1} %{!?1:0} \
 %{expand:%%kernel_meta_package %{?1:%{1}}}\
 %endif\
@@ -1261,7 +1256,7 @@ Cortex-A15 devices with LPAE and HW virtualisation support
 
 %if %{with_zfcpdump}
 %define variant_summary The Linux kernel compiled for zfcpdump usage
-%kernel_variant_package -o zfcpdump
+%kernel_variant_package zfcpdump
 %description zfcpdump-core
 The kernel package contains the Linux kernel (vmlinuz) for use by the
 zfcpdump infrastructure.
@@ -1326,7 +1321,7 @@ ApplyPatch()
     exit 1
   fi
   if ! grep -E "^Patch[0-9]+: $patch\$" %{_specdir}/${RPM_PACKAGE_NAME}.spec ; then
-    if [ "${patch:0:8}" != "patch-%%RPMKVERSION%%." ] ; then
+    if [ "${patch:0:8}" != "patch-5." ] ; then
       echo "ERROR: Patch  $patch  not listed as a source patch in specfile"
       exit 1
     fi
@@ -1353,8 +1348,8 @@ ApplyOptionalPatch()
   fi
 }
 
-%setup -q -n kernel-%%TARFILE_RELEASE%% -c
-mv linux-%%TARFILE_RELEASE%% linux-%{KVERREL}
+%setup -q -n kernel-5.14.0-78.test.fc32 -c
+mv linux-5.14.0-78.test.fc32 linux-%{KVERREL}
 
 cd linux-%{KVERREL}
 cp -a %{SOURCE1} .
@@ -1451,13 +1446,6 @@ for i in *.config; do
   sed -i 's@CONFIG_SYSTEM_TRUSTED_KEYS=""@CONFIG_SYSTEM_TRUSTED_KEYS="certs/rhel.pem"@' $i
 done
 %endif
-%endif
-
-# Adjust FIPS module name for RHEL
-%if 0%{?rhel}
-for i in *.config; do
-  sed -i 's/CONFIG_CRYPTO_FIPS_NAME=.*/CONFIG_CRYPTO_FIPS_NAME="Red Hat Enterprise Linux %{rhel} - Kernel Cryptographic API"/' $i
-done
 %endif
 
 cp %{SOURCE81} .
@@ -2080,11 +2068,6 @@ BuildKernel() {
     rm -f $RPM_BUILD_ROOT/mod-extra.list
     rm -f $RPM_BUILD_ROOT/mod-internal.list
 
-%if %{with_cross}
-    make -C $RPM_BUILD_ROOT/lib/modules/$KernelVer/build M=scripts clean
-    sed -i 's/REBUILD_SCRIPTS_FOR_CROSS:=0/REBUILD_SCRIPTS_FOR_CROSS:=1/' $RPM_BUILD_ROOT/lib/modules/$KernelVer/build/Makefile
-%endif
-
     # Move the devel headers out of the root file system
     mkdir -p $RPM_BUILD_ROOT/usr/src/kernels
     mv $RPM_BUILD_ROOT/lib/modules/$KernelVer/build $RPM_BUILD_ROOT/$DevelDir
@@ -2097,10 +2080,7 @@ BuildKernel() {
 
 %ifnarch armv7hl
     # Generate vmlinux.h and put it to kernel-devel path
-    # zfcpdump build does not have btf anymore
-    if [ "$Variant" != "zfcpdump" ]; then
-        bpftool btf dump file vmlinux format c > $RPM_BUILD_ROOT/$DevelDir/vmlinux.h
-    fi
+    bpftool btf dump file vmlinux format c > $RPM_BUILD_ROOT/$DevelDir/vmlinux.h
 %endif
 
     # prune junk from kernel-devel
@@ -2215,10 +2195,7 @@ chmod +x tools/power/cpupower/utils/version-gen.sh
    %{tools_make}
    popd
    pushd tools/power/x86/intel-speed-select
-   %{make} CFLAGS+="-D_GNU_SOURCE -Iinclude -I/usr/include/libnl3"
-   popd
-   pushd tools/arch/x86/intel_sdsi
-   %{tools_make}
+   %{make}
    popd
 %endif
 %endif
@@ -2262,7 +2239,7 @@ if [ ! -f include/generated/autoconf.h ]; then
    %{make} %{?_smp_mflags} modules_prepare
 fi
 
-%{make} %{?_smp_mflags} ARCH=$Arch V=1 M=samples/bpf/ VMLINUX_H="${RPM_VMLINUX_H}"
+%{make} %{?_smp_mflags} ARCH=$Arch V=1 M=samples/bpf/
 
 # Prevent bpf selftests to build bpftool repeatedly:
 export BPFTOOL=$(pwd)/tools/bpf/bpftool/bpftool
@@ -2270,7 +2247,7 @@ export BPFTOOL=$(pwd)/tools/bpf/bpftool/bpftool
 pushd tools/testing/selftests
 # We need to install here because we need to call make with ARCH set which
 # doesn't seem possible to do in the install section.
-%{make} %{?_smp_mflags} ARCH=$Arch V=1 TARGETS="bpf livepatch vm net net/forwarding net/mptcp netfilter tc-testing memfd" SKIP_TARGETS="" FORCE_TARGETS=1 INSTALL_PATH=%{buildroot}%{_libexecdir}/kselftests VMLINUX_H="${RPM_VMLINUX_H}" install
+%{make} %{?_smp_mflags} ARCH=$Arch V=1 TARGETS="bpf livepatch net net/forwarding net/mptcp netfilter tc-testing memfd" SKIP_TARGETS="" FORCE_TARGETS=1 INSTALL_PATH=%{buildroot}%{_libexecdir}/kselftests VMLINUX_H="${RPM_VMLINUX_H}" install
 
 # 'make install' for bpf is broken and upstream refuses to fix it.
 # Install the needed files manually.
@@ -2325,7 +2302,7 @@ find Documentation -type d | xargs chmod u+w
     fi \
   fi \
   if [ "%{zipmodules}" -eq "1" ]; then \
-    find $RPM_BUILD_ROOT/lib/modules/ -type f -name '*.ko' | xargs -P%{zcpu} -r xz; \
+    find $RPM_BUILD_ROOT/lib/modules/ -type f -name '*.ko' | xargs -P%{zcpu} xz; \
   fi \
 %{nil}
 
@@ -2491,10 +2468,7 @@ install -m644 %{SOURCE2001} %{buildroot}%{_sysconfdir}/sysconfig/cpupower
    %{tools_make} DESTDIR=%{buildroot} install
    popd
    pushd tools/power/x86/intel-speed-select
-   %{tools_make} CFLAGS+="-D_GNU_SOURCE -Iinclude -I/usr/include/libnl3" DESTDIR=%{buildroot} install
-   popd
-   pushd tools/arch/x86/intel_sdsi
-   %{tools_make} DESTDIR=%{buildroot} install
+   %{tools_make} CFLAGS+="-D_GNU_SOURCE -Iinclude" DESTDIR=%{buildroot} install
    popd
 %endif
 pushd tools/thermal/tmon
@@ -2549,12 +2523,6 @@ install -d %{buildroot}%{_libexecdir}/ksamples/pktgen
 find . -type f -executable -exec install -m755 {} %{buildroot}%{_libexecdir}/ksamples/pktgen/{} \;
 find . -type f ! -executable -exec install -m644 {} %{buildroot}%{_libexecdir}/ksamples/pktgen/{} \;
 popd
-popd
-# install vm selftests
-pushd tools/testing/selftests/vm
-find -type d -exec install -d %{buildroot}%{_libexecdir}/kselftests/vm/{} \;
-find -type f -executable -exec install -D -m755 {} %{buildroot}%{_libexecdir}/kselftests/vm/{} \;
-find -type f ! -executable -exec install -D -m644 {} %{buildroot}%{_libexecdir}/kselftests/vm/{} \;
 popd
 # install drivers/net/mlxsw selftests
 pushd tools/testing/selftests/drivers/net/mlxsw
@@ -2643,10 +2611,6 @@ then\
        hardlink -c /usr/src/kernels/*%{?dist}.*/$f $f > /dev/null\
      done)\
 fi\
-%if %{with_cross}\
-    echo "Building scripts"\
-    env --unset=ARCH make -C /usr/src/kernels/%{KVERREL}%{?1:+%{1}} prepare_after_cross\
-%endif\
 %{nil}
 
 #
@@ -2683,20 +2647,9 @@ fi\
 %define kernel_modules_post() \
 %{expand:%%post %{?1:%{1}-}modules}\
 /sbin/depmod -a %{KVERREL}%{?1:+%{1}}\
-if [ ! -f %{_localstatedir}/lib/rpm-state/%{name}/installing_core_%{KVERREL}%{?1:+%{1}} ]; then\
-	mkdir -p %{_localstatedir}/lib/rpm-state/%{name}\
-	touch %{_localstatedir}/lib/rpm-state/%{name}/need_to_run_dracut_%{KVERREL}%{?1:+%{1}}\
-fi\
 %{nil}\
 %{expand:%%postun %{?1:%{1}-}modules}\
 /sbin/depmod -a %{KVERREL}%{?1:+%{1}}\
-%{nil}\
-%{expand:%%posttrans %{?1:%{1}-}modules}\
-if [ -f %{_localstatedir}/lib/rpm-state/%{name}/need_to_run_dracut_%{KVERREL}%{?1:+%{1}} ]; then\
-	rm -f %{_localstatedir}/lib/rpm-state/%{name}/need_to_run_dracut_%{KVERREL}%{?1:+%{1}}\
-	echo "Running: dracut -f --kver %{KVERREL}%{?1:+%{1}}"\
-	dracut -f --kver "%{KVERREL}%{?1:+%{1}}" || exit $?\
-fi\
 %{nil}
 
 # This macro defines a %%posttrans script for a kernel package.
@@ -2711,7 +2664,6 @@ then\
     %{_sbindir}/weak-modules --add-kernel %{KVERREL}%{?1:+%{1}} || exit $?\
 fi\
 %endif\
-rm -f %{_localstatedir}/lib/rpm-state/%{name}/installing_core_%{KVERREL}%{?1:+%{1}}\
 /bin/kernel-install add %{KVERREL}%{?1:+%{1}} /lib/modules/%{KVERREL}%{?1:+%{1}}/vmlinuz || exit $?\
 %{nil}
 
@@ -2732,8 +2684,6 @@ if [ `uname -i` == "x86_64" -o `uname -i` == "i386" ] &&\
    [ -f /etc/sysconfig/kernel ]; then\
   /bin/sed -r -i -e 's/^DEFAULTKERNEL=%{-r*}$/DEFAULTKERNEL=kernel%{?-v:-%{-v*}}/' /etc/sysconfig/kernel || exit $?\
 fi}\
-mkdir -p %{_localstatedir}/lib/rpm-state/%{name}\
-touch %{_localstatedir}/lib/rpm-state/%{name}/installing_core_%{KVERREL}%{?1:+%{1}}\
 %{nil}
 
 #
@@ -2779,7 +2729,6 @@ fi
 %if %{with_headers}
 %files headers
 /usr/include/*
-%exclude %{_includedir}/cpufreq.h
 %endif
 
 %if %{with_cross_headers}
@@ -2852,7 +2801,6 @@ fi
 %{_bindir}/turbostat
 %{_mandir}/man8/turbostat*
 %{_bindir}/intel-speed-select
-%{_sbindir}/intel_sdsi
 %endif
 # cpupowerarchs
 %endif
@@ -3020,7 +2968,6 @@ fi
 #
 #
 %changelog
-%%CHANGELOG%%
 
 ###
 # The following Emacs magic makes C-c C-e use UTC dates.

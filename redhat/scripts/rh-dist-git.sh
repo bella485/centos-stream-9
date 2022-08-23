@@ -76,8 +76,8 @@ echo "Creating diff for review ($tmpdir/diff) and changelog"
 diff -X "$redhat"/git/dontdiff -upr "$tmpdir/$package_name" "$redhat"/rpm/SOURCES/ > "$tmpdir"/diff;
 
 # changelog has been created by genspec.sh, including Resolves line, just copy it here
-echo -e "${package_name}-${rpm_version}\n" > $tmpdir/changelog
-awk '1;/^Resolves: /{exit};' $changelog >> $tmpdir/changelog
+echo -e "${package_name}-${rpm_version}\n" > "$tmpdir"/changelog
+awk '1;/^Resolves: /{exit};' "$changelog" >> "$tmpdir"/changelog
 
 
 # all done

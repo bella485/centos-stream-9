@@ -1,7 +1,259 @@
-include Makefile.common
-include Makefile.rhpkg
+#
+# Deprecated variables
+#
+# This section is intentionally left at the top of the Makefile so it won't be ignored.
+#
+ifdef BREW_FLAGS
+  # deprecated in 9.1
+  $(warning WARNING: BREW_FLAGS will be deprecated in a later release, use BUILD_FLAGS instead.)
+endif
+
+ifdef KOJI_FLAGS
+  # deprecated in 9.1
+  $(warning WARNING: KOJI_FLAGS will be deprecated in a later release, use BUILD_FLAGS instead.)
+endif
+
+ifdef TEST_FLAGS
+  # deprecated in 9.1
+  $(warning WARNING: TEST_FLAGS will be deprecated in a later release, use BUILD_FLAGS instead.)
+endif
+
+include Makefile.variables
 
 LANG=C
+ifndef RHSELFTESTDATA
+  TOPDIR:=$(shell $(GIT) rev-parse --show-toplevel)
+else
+  TOPDIR:=..
+endif
+REDHAT:=$(TOPDIR)/redhat
+include $(TOPDIR)/Makefile.rhelver
+
+ifndef RHDISTDATADIR
+  RHDISTDATADIR=${REDHAT}/self-test/data
+endif
+
+RPMBUILD:=$(shell if [ -x "/usr/bin/rpmbuild" ]; then echo rpmbuild; \
+                  else echo rpm; fi)
+
+MACH:=$(shell uname -m)
+RPMKVERSION:=$(shell $(GIT) show $(HEAD):Makefile | sed -ne '/^VERSION\ =\ /{s///;p;q}')
+RPMKPATCHLEVEL:=$(shell $(GIT) show $(HEAD):Makefile | sed -ne '/^PATCHLEVEL\ =\ /{s///;p;q}')
+RPMKSUBLEVEL:=$(shell $(GIT) show $(HEAD):Makefile | sed -ne '/^SUBLEVEL\ =\ /{s///;p;q}')
+RPMKEXTRAVERSION:=$(shell $(GIT) show $(HEAD):Makefile | sed -ne '/^EXTRAVERSION\ =\ /{s///;p;q}')
+GITID:= $(shell $(GIT) log --max-count=1 --pretty=format:%H $(HEAD))
+ifndef BUILD
+  BUILD:=$(RHEL_RELEASE)
+endif
+FLAVOR=
+CURARCH := $(shell uname -m)
+ARCHCONFIG := $(shell uname -m | sed -e s/x86_64/X86_64/ \
+				     -e s/s390x/S390/ -e s/ppc.*/PPC/ )
+
+# rpm information
+SPECFILE:=$(PACKAGE_NAME).spec
+RPM:=$(REDHAT)/rpm
+SRPMS:=$(RPM)/SRPMS
+SOURCES:=$(RPM)/SOURCES
+TESTPATCH:=$(REDHAT)/linux-kernel-test.patch
+CHANGELOG:=$(PACKAGE_NAME).changelog-$(RHEL_MAJOR).$(RHEL_MINOR)
+CHANGELOG_PREV:=$(PACKAGE_NAME).changelog-$(RHEL_MAJOR).$(shell expr $(RHEL_MINOR) - 1)
+ARCH_LIST=aarch64 ppc64le s390x x86_64
+
+ifndef DISTRO
+  ifneq ($(findstring .fc,$(DIST)),)
+    DISTRO := fedora
+  else
+    DISTRO := rhel
+  endif
+endif
+
+ifndef BUILD_FLAGS
+  ifeq ($(filter $(MAKECMDGOALS),dist-brew distg-brew),)
+	BUILD_FLAGS := $(BREW_FLAGS)
+  endif
+  ifeq ($(filter $(MAKECMDGOALS),dist-koji distg-koji),)
+	BUILD_FLAGS := $(KOJI_FLAGS)
+  endif
+  BUILD_FLAGS += $(TEST_FLAGS)
+endif
+
+ifndef RHJOBS
+  RHJOBS=$(shell j=$$(echo $(MAKEFLAGS) | grep -Eo "\ -j[0-9]*" | xargs ); \
+	  if [ -z "$${j}" ]; then \
+	  	echo "1"; \
+	  else \
+	  	j=$$(echo "$${j}" | tr -d "\-j"); \
+	  	[ -z "$${j}" ] && nproc --all || echo $${j}; \
+	  fi)
+endif
+
+LOCVERFILE:=../localversion
+# create an empty localversion file if you don't want a local buildid
+ifneq ($(wildcard $(LOCVERFILE)),)
+  BUILDID:=$(shell cat $(LOCVERFILE))
+  $(info BUILDID is "$(BUILDID)". Update '$(shell dirname $(REDHAT))/localversion' to change.)
+else
+  ifeq ($(BUILDID),)
+    BUILDID:=.test
+  endif
+  $(info BUILDID is "$(BUILDID)".)
+endif
+
+# options for process_configs.sh script
+ifdef NO_CONFIGCHECKS
+   PROCESS_CONFIGS_OPTS=
+   PROCESS_CONFIGS_CHECK_OPTS=
+   BUILDOPTS += -configchecks
+else
+   PROCESS_CONFIGS_CHECK_OPTS=-n -t -c
+   PROCESS_CONFIGS_OPTS=-n -w -c
+endif
+
+# this section is needed in order to make O= to work
+_OUTPUT := ..
+ifeq ("$(origin O)", "command line")
+  _OUTPUT := $(O)
+  _EXTRA_ARGS := O=$(_OUTPUT)
+endif
+
+# MARKER is the git tag which we base off of for exporting patches
+# Make sure MARKER uses RPMKPATCHLEVEL and RPMKEXTRAVERSION from the kernel
+# makefile as opposed to any adjusted version for snapshotting.
+ifneq ($(RPMKEXTRAVERSION),)
+  MARKER:=v$(RPMKVERSION).$(RPMKPATCHLEVEL)$(RPMKEXTRAVERSION)
+  KEXTRAVERSION:=$(shell echo $(RPMKEXTRAVERSION) | sed -e s/-/./)
+  PREBUILD:=0$(KEXTRAVERSION).
+  UPSTREAM_TARBALL_NAME:=$(RPMKVERSION).$(RPMKPATCHLEVEL)$(RPMKEXTRAVERSION)
+else
+  KEXTRAVERSION:=
+  ifeq ($(RPMKSUBLEVEL),0)
+    MARKER:=v$(RPMKVERSION).$(RPMKPATCHLEVEL)
+    UPSTREAM_TARBALL_NAME:=$(RPMKVERSION).$(RPMKPATCHLEVEL)
+  else
+    MARKER:=v$(RPMKVERSION).$(RPMKPATCHLEVEL).$(RPMKSUBLEVEL)
+    UPSTREAM_TARBALL_NAME:=$(RPMKVERSION).$(RPMKPATCHLEVEL).$(RPMKSUBLEVEL)
+  endif
+  PREBUILD:=
+endif
+
+# If USE_DIST_IN_SOURCE == 1, dist tag is added to PKGRELEASE
+# and we don't need to add it to SRPM. If it's 0 versions used
+# in sources don't carry dist tag and we have to add it to SRPM.
+ifeq ($(USE_DIST_IN_SOURCE),1)
+  SOURCE_DIST:=$(DIST)
+  SRPM_DIST:=
+else
+  SOURCE_DIST:=
+  SRPM_DIST:=$(DIST)
+endif
+
+# If VERSION_ON_UPSTREAM is set, the versioning of the rpm package is based
+# on a branch tracking upstream. This allows for generating rpms
+# based on untagged releases.
+ifndef VERSION_ON_UPSTREAM
+  ifeq ("$(DIST)", ".elrdy")
+    VERSION_ON_UPSTREAM:=1
+  else ifeq ("$(DISTRO)", "fedora")
+    VERSION_ON_UPSTREAM:=1
+  else
+    VERSION_ON_UPSTREAM:=0
+  endif
+endif
+ifeq ($(VERSION_ON_UPSTREAM),1)
+  # UPSTREAM_BRANCH is expected to track mainline.
+  UPSTREAM:=$(shell $(GIT) rev-parse -q --verify origin/$(UPSTREAM_BRANCH) || \
+                  $(GIT) rev-parse -q --verify $(UPSTREAM_BRANCH))
+  ifeq ($(UPSTREAM),)
+      $(error "Missing an $(UPSTREAM_BRANCH) branch")
+  endif
+  MERGE_BASE:=$(shell $(GIT) merge-base $(HEAD) $(UPSTREAM))
+  _TAG:=$(shell $(GIT) describe $(MERGE_BASE))
+  # a snapshot off of a tagged git is of the form [tag]-[cnt]-g[hash]
+  SNAPSHOT:=$(shell echo $(_TAG) | grep -c '\-g')
+
+  ifeq ($(SNAPSHOT),1)
+    # The base for generating tags is the snapshot commit
+    MARKER:=$(shell echo $(_TAG) | awk -F "-g" '{ print $$2 }')
+    # The merge window is weird because the actual versioning hasn't
+    # been updated but we still need something that works for
+    # packaging. Fix this by bumping the patch level and marking
+    # this as rc0
+    ifeq ($(RPMKEXTRAVERSION),)
+      KEXTRAVERSION:=.rc0
+      PREBUILD:=0$(KEXTRAVERSION).
+      RPMKPATCHLEVEL:=$(shell expr $(RPMKPATCHLEVEL) + 1)
+    endif
+    ifneq ($(filter $(MAKECMDGOALS),dist-git-test dist-git),)
+      PREBUILD_GIT_ONLY ?= 0
+    else
+      PREBUILD_GIT_ONLY ?= 1
+    endif
+    ifeq ($(PREBUILD_GIT_ONLY),1)
+      PREBUILD:=$(PREBUILD)$(MARKER).
+    else
+      # Obtain the date that HEAD was committed (not the snapshot commit).
+      HEAD_DATE:=$(shell $(GIT) show -s --format=%cd --date=format:%Y%m%d $(HEAD))
+      PREBUILD:=$(PREBUILD)$(HEAD_DATE)git$(MARKER).
+    endif
+    UPSTREAM_TARBALL_NAME:=$(patsubst v%,%,$(_TAG))
+  endif
+endif
+
+KVERSION:=$(RPMKVERSION).$(RPMKPATCHLEVEL).$(RPMKSUBLEVEL)
+DISTRO_BUILD:=$(PREBUILD)$(BUILD)$(BUILDID)$(SOURCE_DIST)
+KABI_TARBALL:=$(SOURCES)/kernel-abi-stablelists-$(KVERSION)-$(DISTRO_BUILD).tar.bz2
+KABIDW := $(REDHAT)/kabi-dwarf
+KABIDW_TARBALL:=$(SOURCES)/kernel-kabi-dw-$(KVERSION)-$(DISTRO_BUILD).tar.bz2
+PKGRELEASE:=$(PREBUILD)$(BUILD)$(BUILDID)$(SOURCE_DIST)
+RPMVERSION=${RPMKVERSION}.${RPMKPATCHLEVEL}.${RPMKSUBLEVEL}-$(PKGRELEASE)
+SPECRELEASE:=$(PREBUILD)$(BUILD)%{?buildid}%{?dist}
+SRPM:=$(SRPMS)/$(PACKAGE_NAME)-$(KVERSION)-$(PKGRELEASE)$(DIST).src.rpm
+
+#
+# This conditional statement is where fedora, centos, and other (aka RHEL)
+# specific values should be set.
+#
+ifeq ("$(DISTRO)", "fedora")
+  # A non-unified tarball means that the tarball is only upstream sources
+  # and the patches get applied as a diff in the spec file
+  SINGLE_TARBALL:=0
+  TARFILE_RELEASE:=$(UPSTREAM_TARBALL_NAME)
+  RHDISTGIT_BRANCH:=rawhide
+  ifndef BUILD_SCRATCH_TARGET
+    BUILD_SCRATCH_TARGET:=temp-ark-rhel-8-test
+  endif
+else ifeq ("$(DISTRO)", "centos")
+  # A unified tarball means that the tarball in the srpm contains both the
+  # upstream sources and RHEL specific patches.
+  SINGLE_TARBALL:=1
+  RHDISTGIT_BRANCH:=c$(RHEL_MAJOR)s
+  ifndef BUILD_PROFILE
+    BUILD_PROFILE:= -p stream
+  endif
+  ifndef BUILD_SCRATCH_TARGET
+    BUILD_SCRATCH_TARGET:=c$(RHEL_MAJOR)s-candidate
+  endif
+  TARFILE_RELEASE:=$(KVERSION)-$(PKGRELEASE)
+else
+  # A unified tarball means that the tarball in the srpm contains both the
+  # upstream sources and RHEL specific patches.
+  SINGLE_TARBALL:=1
+  RHDISTGIT_BRANCH:=rhel-$(RHEL_MAJOR).$(RHEL_MINOR).0
+  ifndef BUILD_SCRATCH_TARGET
+    BUILD_SCRATCH_TARGET:=rhel-$(RHEL_MAJOR).$(RHEL_MINOR).0-test-pesign
+  endif
+  TARFILE_RELEASE:=$(KVERSION)-$(PKGRELEASE)
+endif
+
+ifndef BUILD_TARGET
+  BUILD_TARGET:=--scratch $(BUILD_SCRATCH_TARGET)
+endif
+
+TARFILE:=linux-$(TARFILE_RELEASE).tar.xz
+TARBALL:=$(REDHAT)/$(TARFILE)
+
+include Makefile.rhpkg
 
 ifeq ("$(ZSTREAM)", "yes")
   __YSTREAM = no
@@ -20,43 +272,15 @@ else
   endif
 endif
 
-ifeq ("$(NO_CONFIGCHECKS)","1")
-   PROCESS_CONFIGS_OPTS=
-   PROCESS_CONFIGS_CHECK_OPTS=
-   BUILDOPTS += -configchecks
-else
-   PROCESS_CONFIGS_CHECK_OPTS=-n -t -c
-   PROCESS_CONFIGS_OPTS=-n -w -c
-endif
-
-BUILD_TARGET ?= --scratch $(BUILD_SCRATCH_TARGET)
-FLAVOR =
-
-RHGITURL?=$(shell $(GIT) config rhg.url || $(GIT) config remote.origin.url)
-RHGITCOMMIT?=$(shell $(GIT) log -1 --pretty=format:%H)
-
-# this section is needed in order to make O= to work
-_OUTPUT := ..
-ifeq ("$(origin O)", "command line")
-  _OUTPUT := $(O)
-  _EXTRA_ARGS := O=$(_OUTPUT)
-endif
-
-CURARCH := $(shell uname -m)
-ARCHCONFIG := $(shell uname -m | sed -e s/x86_64/X86_64/ \
-				     -e s/s390x/S390/ -e s/ppc.*/PPC/ )
-
-KABIDW := $(REDHAT)/kabi-dwarf
-
 include Makefile.cross
 
-RHJOBS?=$(shell j=$$(echo $(MAKEFLAGS) | grep -Eo "\ -j[0-9]*" | xargs ); \
-	if [ -z "$${j}" ]; then \
-		echo "1"; \
-	else \
-		j=$$(echo "$${j}" | tr -d "\-j"); \
-		[ -z "$${j}" ] && nproc --all || echo $${j}; \
-	fi)
+#
+# Targets
+#
+# Do not place variable declarations below this line.  Variables are exported
+# to scripts called in the targets below and do not need to be passed on the
+# command-line.
+#
 
 default: dist-help
 
@@ -182,31 +406,31 @@ dist-stub-key:
 .PHONY:	$(TARBALL)
 $(TARBALL):
 	@if [ $(SINGLE_TARBALL) -eq 1 ]; then \
-		scripts/create-tarball.sh $(GITID) $(TARBALL) linux-$(KVERSION)-$(PKGRELEASE); \
+		scripts/create-tarball.sh $(GITID) linux-$(KVERSION)-$(PKGRELEASE); \
 	else \
-		scripts/create-tarball.sh $(MARKER) $(TARBALL) linux-$(TARFILE_RELEASE); \
+		scripts/create-tarball.sh $(MARKER) linux-$(TARFILE_RELEASE); \
 	fi
 
 .PHONY: $(KABI_TARBALL)
 $(KABI_TARBALL):
-	@(cd kabi && tar cjf $(SOURCES)/$(KABI_TARFILE) kabi-rhel$(RHEL_MAJOR)* kabi-current)
+	@(cd kabi && tar cjf $(KABI_TARBALL) kabi-rhel$(RHEL_MAJOR)* kabi-current)
 
 .PHONY: $(KABIDW_TARBALL)
 $(KABIDW_TARBALL):
 	@if [ ! -d $(KABIDW)/base ]; then \
 		mkdir -p $(KABIDW)/base; \
 	fi
-	@(cd kabi-dwarf && tar cjf $(SOURCES)/$(KABIDW_TARFILE) base run_kabi-dw.sh)
+	@(cd kabi-dwarf && tar cjf $(KABIDW_TARBALL) base run_kabi-dw.sh)
 
 
 dist-tarball: $(TARBALL)
 	@echo "redhat/$(TARFILE)"
 
 dist-kernelrelease:
-	@echo $(PACKAGE_NAME)-$(KVERSION)-$(PKGRELEASE)
+	@echo $(PACKAGE_NAME)-$(KVERSION)-$(DISTRO_BUILD)
 
 dist-kernelversion:
-	@echo $(KVERSION)-$(PKGRELEASE)
+	@echo $(KVERSION)-$(DISTRO_BUILD)
 
 dist-specfile: setup-source
 	@echo $(SOURCES)/$(SPECFILE)
@@ -238,8 +462,12 @@ setup-source: dist-git-version-check dist-clean-sources
 		echo "Creating $(CHANGELOG) as copy of $(CHANGELOG_PREV)"; \
 		cp $(REDHAT)/$(CHANGELOG_PREV) $(REDHAT)/$(CHANGELOG); \
 	fi
-	@cp $(REDHAT)/$(CHANGELOG) $(SOURCES)/$(CHANGELOG)
-	@$(REDHAT)/genspec.sh $(SOURCES) $(SOURCES)/$(SPECFILE) $(SOURCES)/$(CHANGELOG) $(PKGRELEASE) $(RPMKVERSION) $(RPMKPATCHLEVEL) $(RPMKSUBLEVEL) $(SPECRELEASE) "$(BUILDOPTS)" $(MARKER) `cat $(REDHAT)/marker` $(SINGLE_TARBALL) $(TARFILE_RELEASE) $(SNAPSHOT) $(UPSTREAM_BRANCH) $(INCLUDE_FEDORA_FILES) $(INCLUDE_RHEL_FILES) $(RHEL_MAJOR) $(RHEL_MINOR) $(BUILDID)
+	@if [ -z "$(RHSELFTESTDATA)" ]; then \
+		cp $(REDHAT)/$(CHANGELOG) $(SOURCES)/$(CHANGELOG); \
+	else \
+		echo "Mon Mar 28 2022 Fedora Kernel Team <kernel-team@fedoraproject.org> [$(RPMVERSION)]" > $(SOURCES)/$(CHANGELOG); \
+	fi
+	@$(REDHAT)/genspec.sh
 	@cp $(SOURCES)/$(SPECFILE) $(SOURCES)/../SPECS/
 
 generate-testpatch-tmp:
@@ -283,11 +511,11 @@ sources-rh: $(TARBALL) generate-testpatch-tmp setup-source dist-configs-check
 		cp kabi/Module.kabi_$$KABIARCH $(SOURCES)/; \
 		cp kabi/Module.kabi_dup_$$KABIARCH $(SOURCES)/; \
 	done
-	@(cd kabi && tar cjf $(SOURCES)/$(KABI_TARFILE) kabi-rhel$(RHEL_MAJOR)* kabi-current)
+	@(cd kabi && tar cjf $(KABI_TARBALL) kabi-rhel$(RHEL_MAJOR)* kabi-current)
 	@if [ ! -d $(KABIDW)/base ]; then \
 		mkdir -p $(KABIDW)/base; \
 	fi
-	@(cd kabi-dwarf && tar cjf $(SOURCES)/$(KABIDW_TARFILE) base run_kabi-dw.sh)
+	@(cd kabi-dwarf && tar cjf $(KABIDW_TARBALL) base run_kabi-dw.sh)
 
 dist-sources: dist-kabi dist-kabi-dup sources-rh
 
@@ -327,7 +555,7 @@ dist-release-finish: setup-source
 	@cp $(SOURCES)/$(CHANGELOG) $(REDHAT)/$(CHANGELOG)
 	@$(GIT) add $(REDHAT)/$(CHANGELOG)
 	@$(GIT) add $(REDHAT)/marker
-	@$(GIT) commit -s ../Makefile.rhelver $(REDHAT)/marker $(REDHAT)/$(CHANGELOG) $(PACKAGE_NAME).spec.template -m "[redhat] $(PACKAGE_NAME)-$(STAMP_VERSION)-$(PREBUILD)$(BUILD)$(SOURCE_DIST)$(BUILDID)"
+	@$(GIT) commit -s ../Makefile.rhelver $(REDHAT)/marker $(REDHAT)/$(CHANGELOG) $(PACKAGE_NAME).spec.template -m "[redhat] $(PACKAGE_NAME)-$(KVERSION)-$(PREBUILD)$(BUILD)$(SOURCE_DIST)$(BUILDID)"
 dist-release-changed: setup-source
 	@cp $(SOURCES)/$(CHANGELOG) $(REDHAT)/$(CHANGELOG)
 	@echo $(MARKER) > $(REDHAT)/marker
@@ -343,7 +571,7 @@ dist-release-changed: setup-source
 dist-release: dist-clean-sources
 	@$(MAKE) dist-release-changed
 dist-release-tag:
-	@$(GIT) tag -a -m "$(PACKAGE_NAME)-$(STAMP_VERSION)-$(PKGRELEASE)" $(PACKAGE_NAME)-$(STAMP_VERSION)-$(PKGRELEASE)
+	@$(GIT) tag -a -m "$(PACKAGE_NAME)-$(RPMVERSION)" $(PACKAGE_NAME)-$(KVERSION)-$(PKGRELEASE)
 
 git-tree-check:
 	@if test -n "$(DIST_PUSH)" && test -z "$(shell $(GIT) remote get-url gitlab 2>/dev/null)"; then \
@@ -353,7 +581,6 @@ git-tree-check:
 	@$(GIT) diff-index --quiet HEAD || \
 		{ echo -e "Dirty tree, please clean before merging.\n"; exit 1; }
 
-DIST_BRANCH ?= "os-build"
 dist-merge-upstream: git-tree-check
 	@if test "$(shell $(GIT) branch --show-current)" != "$(DIST_BRANCH)"; then \
 		echo -e "Please checkout $(DIST_BRANCH) branch before merging.\n"; \
@@ -376,16 +603,19 @@ dist-fedora-release: git-tree-check
 dist-fedora-release-push: export DIST_PUSH="1"
 dist-fedora-release-push: dist-fedora-release
 
-.PHONY: dist-brew dist-koji
-dist-brew : BUILD_FLAGS ?= $(BREW_FLAGS) $(TEST_FLAGS)
-dist-koji : BUILD_FLAGS ?= $(KOJI_FLAGS) $(TEST_FLAGS)
-distg-brew: BUILD_FLAGS ?= $(BREW_FLAGS) $(TEST_FLAGS)
-distg-koji: BUILD_FLAGS ?= $(KOJI_FLAGS) $(TEST_FLAGS)
+dist-vr-check:
+	@# builds may include a s390x+zfcpdump arch build.  UTS_RELEASE can only have a
+	@# version-release string with max 64 chars.  The version-release for s390x+zfcpdump
+	@# is 29 characters, leaving a maximum of 35 characters for PKGRELEASE.
+	@if [ $$(echo -n $(PKGRELEASE) | wc -c) -gt 35 ]; then \
+		echo "PKGRELEASE ($(PKGRELEASE)) is too long.  Use a shorter localversion (currently $(BUILDID))"; \
+		exit 1; \
+	fi
 
 dist-brew dist-koji: dist-%: dist-srpm
 	$* $(BUILD_PROFILE) build $(BUILD_FLAGS) $(BUILD_TARGET) $(SRPMS)/$(PACKAGE_NAME)-$(KVERSION)-$(PKGRELEASE)$(SRPM_DIST).src.rpm $(OUTPUT_FILE)
 
-distg-brew distg-koji: distg-%:
+distg-brew distg-koji: distg-%: dist-vr-check
 	$* $(BUILD_PROFILE) build $(BUILD_FLAGS) $(BUILD_TARGET) "$(RHGITURL)?redhat/koji#$(RHGITCOMMIT)"
 
 .PHONY: $(REDHAT)/rpm/SOURCES/$(PACKAGE_NAME).spec
@@ -406,7 +636,7 @@ endif
 		exit 1; \
 	fi; \
 	fi
-	$(REDHAT)/scripts/rh-dist-git.sh "$(RHDISTGIT_BRANCH)" "$(RHDISTGIT_CACHE)" "$(RHDISTGIT_TMP)" "$(RHDISTGIT)" "$(TARBALL)" "$(KABI_TARBALL)" "$(KABIDW_TARBALL)" "$(PACKAGE_NAME)" "$(RPMVERSION)-$(PKGRELEASE)" "$(REDHAT)/$(CHANGELOG)" "$(RHEL_MAJOR)" "$(RHPKG_BIN)" "$(SRPMS)/$(PACKAGE_NAME)-$(KVERSION)-$(PKGRELEASE)$(SRPM_DIST).src.rpm"
+	$(REDHAT)/scripts/rh-dist-git.sh "$(RHDISTGIT_BRANCH)" "$(RHDISTGIT_CACHE)" "$(RHDISTGIT_TMP)" "$(RHDISTGIT)" "$(TARBALL)" "$(KABI_TARBALL)" "$(KABIDW_TARBALL)" "$(PACKAGE_NAME)" "$(KVERSION)-$(PKGRELEASE)" "$(REDHAT)/$(CHANGELOG)" "$(RHEL_MAJOR)" "$(RHPKG_BIN)" "$(SRPMS)/$(PACKAGE_NAME)-$(KVERSION)-$(PKGRELEASE)$(SRPM_DIST).src.rpm"
 
 dist-rtg: dist-release
 	@$(MAKE) dist-release-tag
@@ -430,6 +660,9 @@ dist-self-test:
 	else \
 		echo "dist-self-test: The bats package is not installed" ; \
 	fi
+
+dist-self-test-data:
+	./self-test/data/create-data.sh
 
 dist-help:
 	@echo  'Cleaning targets:'
@@ -551,3 +784,5 @@ dist-full-help:
 	@echo  '                    target used by the current branch/tree.'
 	@echo  '  dist-self-test  - Runs self-tests from the redhat/self-test directory'
 	@echo  ''
+
+export
