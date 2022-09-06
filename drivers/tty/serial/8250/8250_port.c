@@ -1035,8 +1035,11 @@ static int broken_efr(struct uart_8250_port *up)
  */
 static void autoconfig_16550a(struct uart_8250_port *up)
 {
+	struct uart_port *port = &up->port;
 	unsigned char status1, status2;
 	unsigned int iersave;
+	unsigned long flags;
+	bool is_console;
 
 	up->port.type = PORT_16550A;
 	up->capabilities |= UART_CAP_FIFO;
@@ -1147,6 +1150,11 @@ static void autoconfig_16550a(struct uart_8250_port *up)
 		return;
 	}
 
+	is_console = uart_console(port);
+
+	if (is_console)
+		printk_cpu_sync_get_irqsave(flags);
+
 	/*
 	 * Try writing and reading the UART_IER_UUE bit (b6).
 	 * If it works, this is probably one of the Xscale platform's
@@ -1182,6 +1190,9 @@ static void autoconfig_16550a(struct uart_8250_port *up)
 	}
 	serial_out(up, UART_IER, iersave);
 
+	if (is_console)
+		printk_cpu_sync_put_irqrestore(flags);
+
 	/*
 	 * We distinguish between 16550A and U6 16550A by counting
 	 * how many bytes are in the FIFO.
@@ -1204,8 +1215,10 @@ static void autoconfig(struct uart_8250_port *up)
 	unsigned char status1, scratch, scratch2, scratch3;
 	unsigned char save_lcr, save_mcr;
 	struct uart_port *port = &up->port;
+	unsigned long cs_flags;
 	unsigned long flags;
 	unsigned int old_capabilities;
+	bool is_console;
 
 	if (!port->iobase && !port->mapbase && !port->membase)
 		return;
@@ -1223,6 +1236,11 @@ static void autoconfig(struct uart_8250_port *up)
 	up->bugs = 0;
 
 	if (!(port->flags & UPF_BUGGY_UART)) {
+		is_console = uart_console(port);
+
+		if (is_console)
+			printk_cpu_sync_get_irqsave(cs_flags);
+
 		/*
 		 * Do a simple existence test first; if we fail this,
 		 * there's no point trying anything else.
@@ -1252,6 +1270,10 @@ static void autoconfig(struct uart_8250_port *up)
 #endif
 		scratch3 = serial_in(up, UART_IER) & 0x0f;
 		serial_out(up, UART_IER, scratch);
+
+		if (is_console)
+			printk_cpu_sync_put_irqrestore(cs_flags);
+
 		if (scratch2 != 0 || scratch3 != 0x0F) {
 			/*
 			 * We failed; there's nothing here
@@ -1349,10 +1371,7 @@ static void autoconfig(struct uart_8250_port *up)
 	serial8250_out_MCR(up, save_mcr);
 	serial8250_clear_fifos(up);
 	serial_in(up, UART_RX);
-	if (up->capabilities & UART_CAP_UUE)
-		serial_out(up, UART_IER, UART_IER_UUE);
-	else
-		serial_out(up, UART_IER, 0);
+	serial8250_clear_IER(up);
 
 out_lock:
 	spin_unlock_irqrestore(&port->lock, flags);
@@ -1378,7 +1397,9 @@ static void autoconfig_irq(struct uart_8250_port *up)
 	unsigned char save_mcr, save_ier;
 	unsigned char save_ICP = 0;
 	unsigned int ICP = 0;
+	unsigned long flags;
 	unsigned long irqs;
+	bool is_console;
 	int irq;
 
 	if (port->flags & UPF_FOURPORT) {
@@ -1388,8 +1409,12 @@ static void autoconfig_irq(struct uart_8250_port *up)
 		inb_p(ICP);
 	}
 
-	if (uart_console(port))
+	is_console = uart_console(port);
+
+	if (is_console) {
 		console_lock();
+		printk_cpu_sync_get_irqsave(flags);
+	}
 
 	/* forget possible initially masked and pending IRQ */
 	probe_irq_off(probe_irq_on());
@@ -1421,8 +1446,10 @@ static void autoconfig_irq(struct uart_8250_port *up)
 	if (port->flags & UPF_FOURPORT)
 		outb_p(save_ICP, ICP);
 
-	if (uart_console(port))
+	if (is_console) {
+		printk_cpu_sync_put_irqrestore(flags);
 		console_unlock();
+	}
 
 	port->irq = (irq > 0) ? irq : 0;
 }
@@ -2153,8 +2180,10 @@ static void serial8250_put_poll_char(struct uart_port *port,
 int serial8250_do_startup(struct uart_port *port)
 {
 	struct uart_8250_port *up = up_to_u8250p(port);
+	unsigned long cs_flags;
 	unsigned long flags;
 	unsigned char lsr, iir;
+	bool is_console;
 	int retval;
 
 	if (!port->fifosize)
@@ -2174,7 +2203,7 @@ int serial8250_do_startup(struct uart_port *port)
 		up->acr = 0;
 		serial_port_out(port, UART_LCR, UART_LCR_CONF_MODE_B);
 		serial_port_out(port, UART_EFR, UART_EFR_ECB);
-		serial_port_out(port, UART_IER, 0);
+		serial8250_set_IER(up, 0);
 		serial_port_out(port, UART_LCR, 0);
 		serial_icr_write(up, UART_CSR, 0); /* Reset the UART */
 		serial_port_out(port, UART_LCR, UART_LCR_CONF_MODE_B);
@@ -2184,7 +2213,7 @@ int serial8250_do_startup(struct uart_port *port)
 
 	if (port->type == PORT_DA830) {
 		/* Reset the port */
-		serial_port_out(port, UART_IER, 0);
+		serial8250_set_IER(up, 0);
 		serial_port_out(port, UART_DA830_PWREMU_MGMT, 0);
 		mdelay(10);
 
@@ -2279,6 +2308,8 @@ int serial8250_do_startup(struct uart_port *port)
 	if (port->irq && (up->port.flags & UPF_SHARE_IRQ))
 		up->port.irqflags |= IRQF_SHARED;
 
+	is_console = uart_console(port);
+
 	if (port->irq && !(up->port.flags & UPF_NO_THRE_TEST)) {
 		unsigned char iir1;
 
@@ -2295,6 +2326,9 @@ int serial8250_do_startup(struct uart_port *port)
 		 */
 		spin_lock_irqsave(&port->lock, flags);
 
+		if (is_console)
+			printk_cpu_sync_get_irqsave(cs_flags);
+
 		wait_for_xmitr(up, UART_LSR_THRE);
 		serial_port_out_sync(port, UART_IER, UART_IER_THRI);
 		udelay(1); /* allow THRE to set */
@@ -2304,6 +2338,9 @@ int serial8250_do_startup(struct uart_port *port)
 		udelay(1); /* allow a working UART time to re-assert THRE */
 		iir = serial_port_in(port, UART_IIR);
 		serial_port_out(port, UART_IER, 0);
+
+		if (is_console)
+			printk_cpu_sync_put_irqrestore(cs_flags);
 
 		spin_unlock_irqrestore(&port->lock, flags);
 
@@ -2361,10 +2398,14 @@ int serial8250_do_startup(struct uart_port *port)
 	 * Do a quick test to see if we receive an interrupt when we enable
 	 * the TX irq.
 	 */
+	if (is_console)
+		printk_cpu_sync_get_irqsave(cs_flags);
 	serial_port_out(port, UART_IER, UART_IER_THRI);
 	lsr = serial_port_in(port, UART_LSR);
 	iir = serial_port_in(port, UART_IIR);
 	serial_port_out(port, UART_IER, 0);
+	if (is_console)
+		printk_cpu_sync_put_irqrestore(cs_flags);
 
 	if (lsr & UART_LSR_TEMT && iir & UART_IIR_NO_INT) {
 		if (!(up->bugs & UART_BUG_TXEN)) {
@@ -2396,7 +2437,7 @@ dont_test_tx_en:
 	if (up->dma) {
 		const char *msg = NULL;
 
-		if (uart_console(port))
+		if (is_console)
 			msg = "forbid DMA for kernel console";
 		else if (serial8250_request_dma(up))
 			msg = "failed to request DMA";
@@ -3295,9 +3336,9 @@ static void serial8250_console_putchar(struct uart_port *port, int ch)
 
 	wait_for_xmitr(up, UART_LSR_THRE);
 
-	console_atomic_lock(flags);
+	printk_cpu_sync_get_irqsave(flags);
 	serial8250_console_putchar_locked(port, ch);
-	console_atomic_unlock(flags);
+	printk_cpu_sync_put_irqrestore(flags);
 }
 
 /*
@@ -3328,7 +3369,7 @@ void serial8250_console_write_atomic(struct uart_8250_port *up,
 	unsigned long flags;
 	unsigned int ier;
 
-	console_atomic_lock(flags);
+	printk_cpu_sync_get_irqsave(flags);
 
 	touch_nmi_watchdog();
 
@@ -3344,7 +3385,7 @@ void serial8250_console_write_atomic(struct uart_8250_port *up,
 	wait_for_xmitr(up, BOTH_EMPTY);
 	serial8250_set_IER(up, ier);
 
-	console_atomic_unlock(flags);
+	printk_cpu_sync_put_irqrestore(flags);
 }
 
 /*
