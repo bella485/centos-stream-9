@@ -108,7 +108,7 @@ function merge_configs()
 	else
 		echo "# $arch" > "$name"
 	fi
-	sort config-merging.$count >> "$name"
+	LC_ALL=C  sort config-merging.$count >> "$name"
 	rm -f config-merged.$count config-merging.$count
 	echo "Building $name complete"
 }
