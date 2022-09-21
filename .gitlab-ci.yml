@@ -87,7 +87,9 @@ c9s_merge_request:
 
 c9s_automotive_check_merge_request:
   extends: [.trusted, .merge_request,
-            .9-common, .trigger_c9s_pipeline, .automotive_full_c9s, .automotive_check_c9s_overrides,
+            .9-common, .trigger_c9s_pipeline,
+            .realtime_full_c9s, .realtime_check_common,
+            .automotive_full_c9s, .automotive_check_c9s_overrides,
             .automotive_check_common]
 
 c9s_realtime_check_merge_request:
@@ -115,6 +117,7 @@ c9s_realtime_merge_request:
 c9s_automotive_merge_request:
   extends: [.trusted, .merge_request,
             .9-common,
+            .realtime_pipeline_common, .realtime_full_c9s,
             .automotive_pipeline_common,
             .trigger_c9s_pipeline, .automotive_full_c9s]
 
