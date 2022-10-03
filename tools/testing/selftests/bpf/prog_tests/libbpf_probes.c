@@ -31,6 +31,9 @@ void test_libbpf_probe_prog_types(void)
 		if (prog_type == BPF_PROG_TYPE_UNSPEC)
 			continue;
 
+		if (prog_type == BPF_PROG_TYPE_LIRC_MODE2)
+			continue;
+
 		if (!test__start_subtest(prog_type_name))
 			continue;
 
