@@ -3397,11 +3397,6 @@ static int validate_branch(struct objtool_file *file, struct symbol *func,
 		switch (insn->type) {
 
 		case INSN_RETURN:
-			if (opts.sls && !insn->retpoline_safe &&
-			    next_insn && next_insn->type != INSN_TRAP) {
-				WARN_FUNC("missing int3 after ret",
-					  insn->sec, insn->offset);
-			}
 			return validate_return(func, insn, &state);
 
 		case INSN_CALL:
@@ -3445,13 +3440,6 @@ static int validate_branch(struct objtool_file *file, struct symbol *func,
 			break;
 
 		case INSN_JUMP_DYNAMIC:
-			if (opts.sls && !insn->retpoline_safe &&
-			    next_insn && next_insn->type != INSN_TRAP) {
-				WARN_FUNC("missing int3 after indirect jump",
-					  insn->sec, insn->offset);
-			}
-
-			/* fallthrough */
 		case INSN_JUMP_DYNAMIC_CONDITIONAL:
 			if (is_sibling_call(insn)) {
 				ret = validate_sibling_call(file, insn, &state);
@@ -3984,6 +3972,41 @@ static int validate_ibt(struct objtool_file *file)
 	return warnings;
 }
 
+static int validate_sls(struct objtool_file *file)
+{
+	struct instruction *insn, *next_insn;
+	int warnings = 0;
+
+	for_each_insn(file, insn) {
+		next_insn = next_insn_same_sec(file, insn);
+
+		if (insn->retpoline_safe)
+			continue;
+
+		switch (insn->type) {
+		case INSN_RETURN:
+			if (!next_insn || next_insn->type != INSN_TRAP) {
+				WARN_FUNC("missing int3 after ret",
+					  insn->sec, insn->offset);
+				warnings++;
+			}
+
+			break;
+		case INSN_JUMP_DYNAMIC:
+			if (!next_insn || next_insn->type != INSN_TRAP) {
+				WARN_FUNC("missing int3 after indirect jump",
+					  insn->sec, insn->offset);
+				warnings++;
+			}
+			break;
+		default:
+			break;
+		}
+	}
+
+	return warnings;
+}
+
 static int validate_reachable_instructions(struct objtool_file *file)
 {
 	struct instruction *insn;
@@ -4052,7 +4075,7 @@ int check(struct objtool_file *file)
 		warnings += ret;
 	}
 
-	if (opts.stackval || opts.orc || opts.uaccess || opts.sls) {
+	if (opts.stackval || opts.orc || opts.uaccess) {
 		ret = validate_functions(file);
 		if (ret < 0)
 			goto out;
@@ -4073,6 +4096,13 @@ int check(struct objtool_file *file)
 
 	if (opts.ibt) {
 		ret = validate_ibt(file);
+		if (ret < 0)
+			goto out;
+		warnings += ret;
+	}
+
+	if (opts.sls) {
+		ret = validate_sls(file);
 		if (ret < 0)
 			goto out;
 		warnings += ret;
