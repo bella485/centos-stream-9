@@ -111,7 +111,7 @@ objtool_link()
 			objtoolcmd="orc generate"
 		fi
 
-		objtoolopt="${objtoolopt} --duplicate"
+		objtoolopt="${objtoolopt} --lto"
 
 		if [ -n "${CONFIG_FTRACE_MCOUNT_USE_OBJTOOL}" ]; then
 			objtoolopt="${objtoolopt} --mcount"
