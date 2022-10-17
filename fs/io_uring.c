@@ -2259,9 +2259,11 @@ static inline unsigned int io_put_rw_kbuf(struct io_kiocb *req)
 
 static inline bool io_run_task_work(void)
 {
-	if (test_thread_flag(TIF_NOTIFY_SIGNAL) || current->task_works) {
+	if (test_thread_flag(TIF_NOTIFY_SIGNAL) || task_work_pending(current)) {
 		__set_current_state(TASK_RUNNING);
-		tracehook_notify_signal();
+		clear_notify_signal();
+		if (task_work_pending(current))
+			task_work_run();
 		return true;
 	}
 
@@ -6964,7 +6966,7 @@ static int io_sq_thread(void *data)
 		}
 
 		prepare_to_wait(&sqd->wait, &wait, TASK_INTERRUPTIBLE);
-		if (!io_sqd_events_pending(sqd) && !current->task_works) {
+		if (!io_sqd_events_pending(sqd) && !task_work_pending(current)) {
 			bool needs_sched = true;
 
 			list_for_each_entry(ctx, &sqd->ctx_list, sqd_list) {
@@ -9242,9 +9244,9 @@ static void io_uring_cancel_generic(bool cancel_all, struct io_sq_data *sqd)
 	}
 }
 
-void __io_uring_cancel(struct files_struct *files)
+void __io_uring_cancel(bool cancel_all)
 {
-	io_uring_cancel_generic(!files, NULL);
+	io_uring_cancel_generic(cancel_all, NULL);
 }
 
 static void *io_uring_validate_mmap_request(struct file *file,
@@ -9547,7 +9549,7 @@ static void __io_uring_show_fdinfo(struct io_ring_ctx *ctx, struct seq_file *m)
 
 		hlist_for_each_entry(req, list, hash_node)
 			seq_printf(m, "  op=%d, task_works=%d\n", req->opcode,
-					req->task->task_works != NULL);
+					task_work_pending(req->task));
 	}
 	spin_unlock_irq(&ctx->completion_lock);
 	if (has_lock)
@@ -10082,6 +10084,31 @@ static int io_unregister_iowq_aff(struct io_ring_ctx *ctx)
 	return io_wq_cpu_affinity(tctx->io_wq, NULL);
 }
 
+static int io_register_iowq_max_workers(struct io_ring_ctx *ctx,
+					void __user *arg)
+{
+	struct io_uring_task *tctx = current->io_uring;
+	__u32 new_count[2];
+	int i, ret;
+
+	if (!tctx || !tctx->io_wq)
+		return -EINVAL;
+	if (copy_from_user(new_count, arg, sizeof(new_count)))
+		return -EFAULT;
+	for (i = 0; i < ARRAY_SIZE(new_count); i++)
+		if (new_count[i] > INT_MAX)
+			return -EINVAL;
+
+	ret = io_wq_max_workers(tctx->io_wq, new_count);
+	if (ret)
+		return ret;
+
+	if (copy_to_user(arg, new_count, sizeof(new_count)))
+		return -EFAULT;
+
+	return 0;
+}
+
 static bool io_register_op_must_quiesce(int op)
 {
 	switch (op) {
@@ -10099,6 +10126,7 @@ static bool io_register_op_must_quiesce(int op)
 	case IORING_REGISTER_BUFFERS_UPDATE:
 	case IORING_REGISTER_IOWQ_AFF:
 	case IORING_UNREGISTER_IOWQ_AFF:
+	case IORING_REGISTER_IOWQ_MAX_WORKERS:
 		return false;
 	default:
 		return true;
@@ -10249,6 +10277,12 @@ static int __io_uring_register(struct io_ring_ctx *ctx, unsigned opcode,
 		if (arg || nr_args)
 			break;
 		ret = io_unregister_iowq_aff(ctx);
+		break;
+	case IORING_REGISTER_IOWQ_MAX_WORKERS:
+		ret = -EINVAL;
+		if (!arg || nr_args != 2)
+			break;
+		ret = io_register_iowq_max_workers(ctx, arg);
 		break;
 	default:
 		ret = -EINVAL;
