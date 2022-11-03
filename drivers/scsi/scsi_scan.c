@@ -406,9 +406,14 @@ static void scsi_target_destroy(struct scsi_target *starget)
 static void scsi_target_dev_release(struct device *dev)
 {
 	struct device *parent = dev->parent;
+	struct Scsi_Host *shost = dev_to_shost(parent);
 	struct scsi_target *starget = to_scsi_target(dev);
 
 	kfree(starget);
+
+	if (!atomic_dec_return(&shost->nr_targets))
+		complete_all(&shost->targets_completion);
+
 	put_device(parent);
 }
 
@@ -521,6 +526,7 @@ static struct scsi_target *scsi_alloc_target(struct device *parent,
 	starget->state = STARGET_CREATED;
 	starget->scsi_level = SCSI_2;
 	starget->max_target_blocked = SCSI_DEFAULT_TARGET_BLOCKED;
+	atomic_inc(&shost->nr_targets);
  retry:
 	spin_lock_irqsave(shost->host_lock, flags);
 

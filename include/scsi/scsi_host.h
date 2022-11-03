@@ -709,6 +709,9 @@ struct Scsi_Host {
 	/* ldm bits */
 	struct device		shost_gendev, shost_dev;
 
+	atomic_t nr_targets;
+	struct completion   targets_completion;
+
 	/*
 	 * Points to the transport data (if any) which is allocated
 	 * separately
