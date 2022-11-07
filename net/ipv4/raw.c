@@ -1020,7 +1020,7 @@ void *raw_seq_start(struct seq_file *seq, loff_t *pos)
 {
 	struct raw_hashinfo *h = pde_data(file_inode(seq->file));
 
-	read_lock(&h->lock);
+	read_lock_bh(&h->lock);
 	return *pos ? raw_get_idx(seq, *pos - 1) : SEQ_START_TOKEN;
 }
 EXPORT_SYMBOL_GPL(raw_seq_start);
@@ -1043,7 +1043,7 @@ void raw_seq_stop(struct seq_file *seq, void *v)
 {
 	struct raw_hashinfo *h = pde_data(file_inode(seq->file));
 
-	read_unlock(&h->lock);
+	read_unlock_bh(&h->lock);
 }
 EXPORT_SYMBOL_GPL(raw_seq_stop);
 

@@ -64,7 +64,7 @@ static struct sock *raw_sock_get(struct net *net, const struct inet_diag_req_v2 
 	if (IS_ERR(hashinfo))
 		return ERR_CAST(hashinfo);
 
-	read_lock(&hashinfo->lock);
+	read_lock_bh(&hashinfo->lock);
 	for (slot = 0; slot < RAW_HTABLE_SIZE; slot++) {
 		sk_for_each(s, &hashinfo->ht[slot]) {
 			sk = raw_lookup(net, s, r);
@@ -82,7 +82,7 @@ static struct sock *raw_sock_get(struct net *net, const struct inet_diag_req_v2 
 		}
 	}
 out_unlock:
-	read_unlock(&hashinfo->lock);
+	read_unlock_bh(&hashinfo->lock);
 
 	return sk ? sk : ERR_PTR(-ENOENT);
 }
@@ -154,7 +154,7 @@ static void raw_diag_dump(struct sk_buff *skb, struct netlink_callback *cb,
 	s_slot = cb->args[0];
 	num = s_num = cb->args[1];
 
-	read_lock(&hashinfo->lock);
+	read_lock_bh(&hashinfo->lock);
 	for (slot = s_slot; slot < RAW_HTABLE_SIZE; s_num = 0, slot++) {
 		num = 0;
 
@@ -181,7 +181,7 @@ next:
 	}
 
 out_unlock:
-	read_unlock(&hashinfo->lock);
+	read_unlock_bh(&hashinfo->lock);
 
 	cb->args[0] = slot;
 	cb->args[1] = num;
