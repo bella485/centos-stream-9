@@ -4553,9 +4553,6 @@ static int sock_has_perm(struct sock *sk, u32 perms)
 	struct common_audit_data ad;
 	struct lsm_network_audit net = {0,};
 
-	if (sksec->sid == SECINITSID_KERNEL)
-		return 0;
-
 	ad.type = LSM_AUDIT_DATA_NET;
 	ad.u.net = &net;
 	ad.u.net->sk = sk;
