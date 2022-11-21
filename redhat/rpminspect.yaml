@@ -2,6 +2,11 @@
 
 ---
 inspections:
+    addedfiles: off
+    changedfiles: off
+    removedfiles: off
+    kmod: off
+    rpmdeps: off
     upstream: off
 
 badfuncs:
