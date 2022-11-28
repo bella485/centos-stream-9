@@ -622,6 +622,9 @@ BuildRequires: zlib-devel binutils-devel
 %endif
 %if %{with_selftests}
 BuildRequires: clang llvm fuse-devel
+%ifarch x86_64
+BuildRequires: lld
+%endif
 %ifnarch %{arm}
 BuildRequires: numactl-devel
 %endif
@@ -2117,14 +2120,6 @@ BuildKernel() {
     # the F17 UsrMove feature.
     ln -sf $DevelDir $RPM_BUILD_ROOT/lib/modules/$KernelVer/build
 
-%ifnarch armv7hl
-    # Generate vmlinux.h and put it to kernel-devel path
-    # zfcpdump build does not have btf anymore
-    if [ "$Variant" != "zfcpdump" ]; then
-        bpftool btf dump file vmlinux format c > $RPM_BUILD_ROOT/$DevelDir/vmlinux.h
-    fi
-%endif
-
     # prune junk from kernel-devel
     find $RPM_BUILD_ROOT/usr/src/kernels -name ".*.cmd" -delete
 
@@ -2259,10 +2254,6 @@ pushd tools/vm/
 popd
 %endif
 
-if [ -f $DevelDir/vmlinux.h ]; then
-  RPM_VMLINUX_H=$DevelDir/vmlinux.h
-fi
-
 %global bpftool_make \
   %{__make} EXTRA_CFLAGS="${RPM_OPT_FLAGS}" EXTRA_LDFLAGS="%{__global_ldflags}" DESTDIR=$RPM_BUILD_ROOT %{?make_opts} VMLINUX_H="${RPM_VMLINUX_H}" V=1
 %if %{with_bpftool}
@@ -2284,10 +2275,22 @@ if [ ! -f include/generated/autoconf.h ]; then
    %{make} %{?_smp_mflags} modules_prepare
 fi
 
-%{make} %{?_smp_mflags} ARCH=$Arch V=1 M=samples/bpf/ VMLINUX_H="${RPM_VMLINUX_H}" || true
-
 # Prevent bpf selftests to build bpftool repeatedly:
 export BPFTOOL=$(pwd)/tools/bpf/bpftool/bpftool
+
+%ifnarch armv7hl
+    # Generate vmlinux.h and put it to kernel-devel path
+    # zfcpdump build does not have btf anymore
+    if [ "$Variant" != "zfcpdump" ]; then
+        ${BPFTOOL} btf dump file vmlinux format c > $RPM_BUILD_ROOT/$DevelDir/vmlinux.h
+    fi
+%endif
+
+if [ -f $DevelDir/vmlinux.h ]; then
+  RPM_VMLINUX_H=$DevelDir/vmlinux.h
+fi
+
+%{make} %{?_smp_mflags} ARCH=$Arch V=1 M=samples/bpf/ VMLINUX_H="${RPM_VMLINUX_H}" || true
 
 pushd tools/testing/selftests
 # We need to install here because we need to call make with ARCH set which
