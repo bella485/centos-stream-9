@@ -23,6 +23,8 @@ EMPTY=armv7hl armv7hl-debug armv7hl-lpae armv7hl-lpae-debug
 x86_64=generic:generic-x86:generic-x86-x86_64
 x86_64-debug=generic:generic-x86:generic-x86-x86_64:debug:debug-x86-x86_64
 x86_64-kgcov=generic:generic-x86:generic-x86-x86_64:kgcov
+x86_64-rt=generic:generic-x86:generic-x86-x86_64:rt
+x86_64-rtdebug=generic:generic-x86:generic-x86-x86_64:rt:debug:debug-x86-x86_64
 
 # ppc64le
 ppc64le=generic:generic-powerpc
@@ -39,3 +41,5 @@ s390x-kgcov=generic:generic-s390x:kgcov
 aarch64=generic:generic-arm:generic-arm-aarch64
 aarch64-debug=generic:generic-arm:generic-arm-aarch64:debug:debug-arm-aarch64
 aarch64-kgcov=generic:generic-arm:generic-arm-aarch64:kgcov
+aarch64-rt=generic:generic-arm:generic-arm-aarch64:rt:rt-arm-aarch64
+aarch64-rtdebug=generic:generic-arm:generic-arm-aarch64:rt:rt-arm-aarch64:debug:debug-arm-aarch64
