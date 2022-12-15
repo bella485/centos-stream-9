@@ -135,7 +135,6 @@ do {									\
 		ret += inc;						\
 	}								\
 } while (0)
-
 #define SPI_STATISTICS_ATTRS(field, file)				\
 static ssize_t spi_controller_##field##_show(struct device *dev,	\
 					     struct device_attribute *attr, \
@@ -341,6 +340,7 @@ static void spi_statistics_add_transfer_stats(struct spi_statistics *pcpu_stats,
 /* modalias support makes "modprobe $MODALIAS" new-style hotplug work,
  * and the sysfs version makes coldplug work too.
  */
+
 static const struct spi_device_id *spi_match_id(const struct spi_device_id *id,
 						const struct spi_device *sdev)
 {
@@ -469,7 +469,6 @@ int __spi_register_driver(struct module *owner, struct spi_driver *sdrv)
 {
 	sdrv->driver.owner = owner;
 	sdrv->driver.bus = &spi_bus_type;
-
 	/*
 	 * For Really Good Reasons we use spi: modaliases not of:
 	 * modaliases for DT so module autoloading won't work if we
@@ -509,7 +508,6 @@ int __spi_register_driver(struct module *owner, struct spi_driver *sdrv)
 				sdrv->driver.name, of_id->compatible);
 		}
 	}
-
 	return driver_register(&sdrv->driver);
 }
 EXPORT_SYMBOL_GPL(__spi_register_driver);
@@ -573,12 +571,12 @@ struct spi_device *spi_alloc_device(struct spi_controller *ctlr)
 		spi_controller_put(ctlr);
 		return NULL;
 	}
-
 	spi->master = spi->controller = ctlr;
 	spi->dev.parent = &ctlr->dev;
 	spi->dev.bus = &spi_bus_type;
 	spi->dev.release = spidev_release;
 	spi->mode = ctlr->buswidth_override_bits;
+
 
 	device_initialize(&spi->dev);
 	return spi;
@@ -971,7 +969,7 @@ static void spi_set_cs(struct spi_device *spi, bool enable, bool force)
 	spi->controller->last_cs_mode_high = spi->mode & SPI_CS_HIGH;
 
 	if ((spi->cs_gpiod || !spi->controller->set_cs_timing) && !activate) {
-		spi_delay_exec(&spi->cs_hold, NULL);
+			spi_delay_exec(&spi->cs_hold, NULL);
 	}
 
 	if (spi->mode & SPI_CS_HIGH)
@@ -979,21 +977,21 @@ static void spi_set_cs(struct spi_device *spi, bool enable, bool force)
 
 	if (spi->cs_gpiod) {
 		if (!(spi->mode & SPI_NO_CS)) {
-			/*
-			 * Historically ACPI has no means of the GPIO polarity and
-			 * thus the SPISerialBus() resource defines it on the per-chip
-			 * basis. In order to avoid a chain of negations, the GPIO
-			 * polarity is considered being Active High. Even for the cases
-			 * when _DSD() is involved (in the updated versions of ACPI)
-			 * the GPIO CS polarity must be defined Active High to avoid
-			 * ambiguity. That's why we use enable, that takes SPI_CS_HIGH
-			 * into account.
-			 */
-			if (has_acpi_companion(&spi->dev))
-				gpiod_set_value_cansleep(spi->cs_gpiod, !enable);
-			else
-				/* Polarity handled by GPIO library */
-				gpiod_set_value_cansleep(spi->cs_gpiod, activate);
+				/*
+				 * Historically ACPI has no means of the GPIO polarity and
+				 * thus the SPISerialBus() resource defines it on the per-chip
+				 * basis. In order to avoid a chain of negations, the GPIO
+				 * polarity is considered being Active High. Even for the cases
+				 * when _DSD() is involved (in the updated versions of ACPI)
+				 * the GPIO CS polarity must be defined Active High to avoid
+				 * ambiguity. That's why we use enable, that takes SPI_CS_HIGH
+				 * into account.
+				 */
+				if (has_acpi_companion(&spi->dev))
+					gpiod_set_value_cansleep(spi->cs_gpiod, !enable);
+				else
+					/* Polarity handled by GPIO library */
+					gpiod_set_value_cansleep(spi->cs_gpiod, activate);
 		}
 		/* Some SPI masters need both GPIO CS & slave_select */
 		if ((spi->controller->flags & SPI_MASTER_GPIO_SS) &&
@@ -1642,7 +1640,6 @@ static int __spi_pump_transfer_message(struct spi_controller *ctlr,
 
 	return 0;
 }
-
 /**
  * __spi_pump_messages - function which processes spi message queue
  * @ctlr: controller to process queue for
@@ -1662,7 +1659,6 @@ static void __spi_pump_messages(struct spi_controller *ctlr, bool in_kthread)
 	bool was_busy = false;
 	unsigned long flags;
 	int ret;
-
 
 	/* Lock queue */
 	spin_lock_irqsave(&ctlr->queue_lock, flags);
@@ -2400,7 +2396,6 @@ int acpi_spi_count_resources(struct acpi_device *adev)
 	return count;
 }
 EXPORT_SYMBOL_GPL(acpi_spi_count_resources);
-
 static void acpi_spi_parse_apple_properties(struct acpi_device *dev,
 					    struct acpi_spi_lookup *lookup)
 {
@@ -2431,7 +2426,6 @@ static void acpi_spi_parse_apple_properties(struct acpi_device *dev,
 }
 
 static struct spi_controller *acpi_spi_find_controller_by_adev(struct acpi_device *adev);
-
 static int acpi_spi_add_resource(struct acpi_resource *ares, void *data)
 {
 	struct acpi_spi_lookup *lookup = data;
@@ -2450,7 +2444,6 @@ static int acpi_spi_add_resource(struct acpi_resource *ares, void *data)
 
 			if (lookup->index == -1 && !ctlr)
 				return -ENODEV;
-
 			status = acpi_get_handle(NULL,
 						 sb->resource_source.string_ptr,
 						 &parent_handle);
@@ -2473,7 +2466,6 @@ static int acpi_spi_add_resource(struct acpi_resource *ares, void *data)
 
 				lookup->ctlr = ctlr;
 			}
-
 			/*
 			 * ACPI DeviceSelection numbering is handled by the
 			 * host controller driver in Windows and can vary
@@ -2572,6 +2564,7 @@ struct spi_device *acpi_spi_device_alloc(struct spi_controller *ctlr,
 		return ERR_PTR(-ENOMEM);
 	}
 
+
 	ACPI_COMPANION_SET(&spi->dev, adev);
 	spi->max_speed_hz	= lookup.max_speed_hz;
 	spi->mode		|= lookup.mode;
@@ -2599,7 +2592,6 @@ static acpi_status acpi_register_spi_device(struct spi_controller *ctlr,
 		else
 			return AE_OK;
 	}
-
 	acpi_set_modalias(adev, acpi_device_hid(adev), spi->modalias,
 			  sizeof(spi->modalias));
 
@@ -2871,6 +2863,7 @@ struct spi_controller *__devm_spi_alloc_controller(struct device *dev,
 }
 EXPORT_SYMBOL_GPL(__devm_spi_alloc_controller);
 
+
 /**
  * spi_get_gpio_descs() - grab chip select GPIOs for the master
  * @ctlr: The SPI master to grab GPIO descriptors for
@@ -3056,14 +3049,14 @@ int spi_register_controller(struct spi_controller *ctlr)
 	dev_set_name(&ctlr->dev, "spi%u", ctlr->bus_num);
 
 	if (!spi_controller_is_slave(ctlr) && ctlr->use_gpio_descriptors) {
-		status = spi_get_gpio_descs(ctlr);
-		if (status)
-			goto free_bus_id;
-		/*
-		 * A controller using GPIO descriptors always
-		 * supports SPI_CS_HIGH if need be.
-		 */
-		ctlr->mode_bits |= SPI_CS_HIGH;
+			status = spi_get_gpio_descs(ctlr);
+			if (status)
+				goto free_bus_id;
+			/*
+			 * A controller using GPIO descriptors always
+			 * supports SPI_CS_HIGH if need be.
+			 */
+			ctlr->mode_bits |= SPI_CS_HIGH;
 	}
 
 	/*
@@ -3077,7 +3070,6 @@ int spi_register_controller(struct spi_controller *ctlr)
 
 	/* Setting last_cs to -1 means no chip selected */
 	ctlr->last_cs = -1;
-
 	status = device_add(&ctlr->dev);
 	if (status < 0)
 		goto free_bus_id;
@@ -3201,11 +3193,6 @@ void spi_unregister_controller(struct spi_controller *ctlr)
 
 	device_del(&ctlr->dev);
 
-	/* Release the last reference on the controller if its driver
-	 * has not yet been converted to devm_spi_alloc_master/slave().
-	 */
-	if (!ctlr->devm_allocated)
-		put_device(&ctlr->dev);
 	/* Free bus id */
 	mutex_lock(&board_lock);
 	if (found == ctlr)
@@ -3215,6 +3202,11 @@ void spi_unregister_controller(struct spi_controller *ctlr)
 	if (IS_ENABLED(CONFIG_SPI_DYNAMIC))
 		mutex_unlock(&ctlr->add_lock);
 
+	/* Release the last reference on the controller if its driver
+	 * has not yet been converted to devm_spi_alloc_master/slave().
+	 */
+	if (!ctlr->devm_allocated)
+		put_device(&ctlr->dev);
 }
 EXPORT_SYMBOL_GPL(spi_unregister_controller);
 
@@ -3571,10 +3563,11 @@ int spi_setup(struct spi_device *spi)
 
 	if (!spi->bits_per_word)
 		spi->bits_per_word = 8;
-		status = __spi_validate_bits_per_word(spi->controller,
-						      spi->bits_per_word);
-		if (status)
-			return status;
+
+	status = __spi_validate_bits_per_word(spi->controller,
+					      spi->bits_per_word);
+	if (status)
+		return status;
 
 	if (spi->controller->max_speed_hz &&
 	    (!spi->max_speed_hz ||
@@ -3972,7 +3965,6 @@ static void __spi_transfer_message_noqueue(struct spi_controller *ctlr, struct s
 out:
 	mutex_unlock(&ctlr->io_mutex);
 }
-
 /*-------------------------------------------------------------------------*/
 
 /* Utility methods for SPI protocol drivers, layered on
@@ -4030,11 +4022,11 @@ static int __spi_sync(struct spi_device *spi, struct spi_message *message)
 	message->context = &done;
 	status = spi_async_locked(spi, message);
 	if (status == 0) {
+
 		wait_for_completion(&done);
 		status = message->status;
 	}
 	message->context = NULL;
-
 	return status;
 }
 
