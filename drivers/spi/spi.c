@@ -286,8 +286,8 @@ static const struct attribute_group *spi_master_groups[] = {
 };
 
 static void spi_statistics_add_transfer_stats(struct spi_statistics *stats,
-					      struct spi_transfer *xfer,
-					      struct spi_controller *ctlr)
+				       struct spi_transfer *xfer,
+				       struct spi_controller *ctlr)
 {
 	unsigned long flags;
 	int l2len = min(fls(xfer->len), SPI_STATISTICS_HISTO_SIZE) - 1;
@@ -450,7 +450,6 @@ int __spi_register_driver(struct module *owner, struct spi_driver *sdrv)
 {
 	sdrv->driver.owner = owner;
 	sdrv->driver.bus = &spi_bus_type;
-
 	/*
 	 * For Really Good Reasons we use spi: modaliases not of:
 	 * modaliases for DT so module autoloading won't work if we
@@ -490,7 +489,6 @@ int __spi_register_driver(struct module *owner, struct spi_driver *sdrv)
 				sdrv->driver.name, of_id->compatible);
 		}
 	}
-
 	return driver_register(&sdrv->driver);
 }
 EXPORT_SYMBOL_GPL(__spi_register_driver);
@@ -517,12 +515,6 @@ static LIST_HEAD(spi_controller_list);
  * also used to protect object of type struct idr
  */
 static DEFINE_MUTEX(board_lock);
-
-/*
- * Prevents addition of devices with same chip select and
- * addition of devices below an unregistering controller.
- */
-static DEFINE_MUTEX(spi_add_lock);
 
 /**
  * spi_alloc_device - Allocate a new SPI device
@@ -676,9 +668,9 @@ static int spi_add_device(struct spi_device *spi)
 	/* Set the bus ID string */
 	spi_dev_set_name(spi);
 
-	mutex_lock(&spi_add_lock);
+	mutex_lock(&ctlr->add_lock);
 	status = __spi_add_device(spi);
-	mutex_unlock(&spi_add_lock);
+	mutex_unlock(&ctlr->add_lock);
 	return status;
 }
 
@@ -697,7 +689,7 @@ static int spi_add_device_locked(struct spi_device *spi)
 	/* Set the bus ID string */
 	spi_dev_set_name(spi);
 
-	WARN_ON(!mutex_is_locked(&spi_add_lock));
+	WARN_ON(!mutex_is_locked(&ctlr->add_lock));
 	return __spi_add_device(spi);
 }
 
@@ -935,7 +927,6 @@ static void spi_res_release(struct spi_controller *ctlr, struct spi_message *mes
 }
 
 /*-------------------------------------------------------------------------*/
-
 static void spi_set_cs(struct spi_device *spi, bool enable, bool force)
 {
 	bool activate = enable;
@@ -2370,7 +2361,6 @@ int acpi_spi_count_resources(struct acpi_device *adev)
 	return count;
 }
 EXPORT_SYMBOL_GPL(acpi_spi_count_resources);
-
 static void acpi_spi_parse_apple_properties(struct acpi_device *dev,
 					    struct acpi_spi_lookup *lookup)
 {
@@ -2401,7 +2391,6 @@ static void acpi_spi_parse_apple_properties(struct acpi_device *dev,
 }
 
 static struct spi_controller *acpi_spi_find_controller_by_adev(struct acpi_device *adev);
-
 static int acpi_spi_add_resource(struct acpi_resource *ares, void *data)
 {
 	struct acpi_spi_lookup *lookup = data;
@@ -2420,7 +2409,6 @@ static int acpi_spi_add_resource(struct acpi_resource *ares, void *data)
 
 			if (lookup->index == -1 && !ctlr)
 				return -ENODEV;
-
 			status = acpi_get_handle(NULL,
 						 sb->resource_source.string_ptr,
 						 &parent_handle);
@@ -2443,7 +2431,6 @@ static int acpi_spi_add_resource(struct acpi_resource *ares, void *data)
 
 				lookup->ctlr = ctlr;
 			}
-
 			/*
 			 * ACPI DeviceSelection numbering is handled by the
 			 * host controller driver in Windows and can vary
@@ -2542,6 +2529,7 @@ struct spi_device *acpi_spi_device_alloc(struct spi_controller *ctlr,
 		return ERR_PTR(-ENOMEM);
 	}
 
+
 	ACPI_COMPANION_SET(&spi->dev, adev);
 	spi->max_speed_hz	= lookup.max_speed_hz;
 	spi->mode		|= lookup.mode;
@@ -2569,7 +2557,6 @@ static acpi_status acpi_register_spi_device(struct spi_controller *ctlr,
 		else
 			return AE_OK;
 	}
-
 	acpi_set_modalias(adev, acpi_device_hid(adev), spi->modalias,
 			  sizeof(spi->modalias));
 
@@ -3189,7 +3176,7 @@ void spi_unregister_controller(struct spi_controller *ctlr)
 
 	/* Prevent addition of new devices, unregister existing ones */
 	if (IS_ENABLED(CONFIG_SPI_DYNAMIC))
-		mutex_lock(&spi_add_lock);
+		mutex_lock(&ctlr->add_lock);
 
 	device_for_each_child(&ctlr->dev, NULL, __unregister);
 
@@ -3220,7 +3207,7 @@ void spi_unregister_controller(struct spi_controller *ctlr)
 	mutex_unlock(&board_lock);
 
 	if (IS_ENABLED(CONFIG_SPI_DYNAMIC))
-		mutex_unlock(&spi_add_lock);
+		mutex_unlock(&ctlr->add_lock);
 }
 EXPORT_SYMBOL_GPL(spi_unregister_controller);
 
@@ -3254,6 +3241,7 @@ int spi_controller_resume(struct spi_controller *ctlr)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(spi_controller_resume);
+
 
 /*-------------------------------------------------------------------------*/
 
