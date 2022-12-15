@@ -18,7 +18,6 @@
 #include <linux/mod_devicetable.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/spi-mem.h>
-#include <linux/of_gpio.h>
 #include <linux/gpio/consumer.h>
 #include <linux/pm_runtime.h>
 #include <linux/pm_domain.h>
@@ -287,8 +286,8 @@ static const struct attribute_group *spi_master_groups[] = {
 };
 
 static void spi_statistics_add_transfer_stats(struct spi_statistics *stats,
-				       struct spi_transfer *xfer,
-				       struct spi_controller *ctlr)
+					      struct spi_transfer *xfer,
+					      struct spi_controller *ctlr)
 {
 	unsigned long flags;
 	int l2len = min(fls(xfer->len), SPI_STATISTICS_HISTO_SIZE) - 1;
@@ -315,7 +314,6 @@ static void spi_statistics_add_transfer_stats(struct spi_statistics *stats,
 /* modalias support makes "modprobe $MODALIAS" new-style hotplug work,
  * and the sysfs version makes coldplug work too.
  */
-
 static const struct spi_device_id *spi_match_id(const struct spi_device_id *id,
 						const struct spi_device *sdev)
 {
@@ -444,6 +442,7 @@ int __spi_register_driver(struct module *owner, struct spi_driver *sdrv)
 {
 	sdrv->driver.owner = owner;
 	sdrv->driver.bus = &spi_bus_type;
+
 	/*
 	 * For Really Good Reasons we use spi: modaliases not of:
 	 * modaliases for DT so module autoloading won't work if we
@@ -483,6 +482,7 @@ int __spi_register_driver(struct module *owner, struct spi_driver *sdrv)
 				sdrv->driver.name, of_id->compatible);
 		}
 	}
+
 	return driver_register(&sdrv->driver);
 }
 EXPORT_SYMBOL_GPL(__spi_register_driver);
@@ -544,7 +544,6 @@ struct spi_device *spi_alloc_device(struct spi_controller *ctlr)
 	spi->dev.parent = &ctlr->dev;
 	spi->dev.bus = &spi_bus_type;
 	spi->dev.release = spidev_release;
-	spi->cs_gpio = -ENOENT;
 	spi->mode = ctlr->buswidth_override_bits;
 
 	spin_lock_init(&spi->statistics.lock);
@@ -608,11 +607,8 @@ static int __spi_add_device(struct spi_device *spi)
 		return -ENODEV;
 	}
 
-	/* Descriptors take precedence */
 	if (ctlr->cs_gpiods)
 		spi->cs_gpiod = ctlr->cs_gpiods[spi->chip_select];
-	else if (ctlr->cs_gpios)
-		spi->cs_gpio = ctlr->cs_gpios[spi->chip_select];
 
 	/* Drivers may modify this initial i/o setup, but will
 	 * normally rely on the device being setup.  Devices
@@ -923,6 +919,7 @@ static void spi_res_release(struct spi_controller *ctlr, struct spi_message *mes
 }
 
 /*-------------------------------------------------------------------------*/
+
 static void spi_set_cs(struct spi_device *spi, bool enable, bool force)
 {
 	bool activate = enable;
@@ -940,20 +937,15 @@ static void spi_set_cs(struct spi_device *spi, bool enable, bool force)
 	spi->controller->last_cs_enable = enable;
 	spi->controller->last_cs_mode_high = spi->mode & SPI_CS_HIGH;
 
-	if (spi->cs_gpiod || gpio_is_valid(spi->cs_gpio) ||
-	    !spi->controller->set_cs_timing) {
-		if (activate)
-			spi_delay_exec(&spi->cs_setup, NULL);
-		else
-			spi_delay_exec(&spi->cs_hold, NULL);
+	if ((spi->cs_gpiod || !spi->controller->set_cs_timing) && !activate) {
+		spi_delay_exec(&spi->cs_hold, NULL);
 	}
 
 	if (spi->mode & SPI_CS_HIGH)
 		enable = !enable;
 
-	if (spi->cs_gpiod || gpio_is_valid(spi->cs_gpio)) {
+	if (spi->cs_gpiod) {
 		if (!(spi->mode & SPI_NO_CS)) {
-			if (spi->cs_gpiod) {
 				/*
 				 * Historically ACPI has no means of the GPIO polarity and
 				 * thus the SPISerialBus() resource defines it on the per-chip
@@ -969,13 +961,6 @@ static void spi_set_cs(struct spi_device *spi, bool enable, bool force)
 				else
 					/* Polarity handled by GPIO library */
 					gpiod_set_value_cansleep(spi->cs_gpiod, activate);
-			} else {
-				/*
-				 * invert the enable line, as active low is
-				 * default for SPI.
-				 */
-				gpio_set_value_cansleep(spi->cs_gpio, !enable);
-			}
 		}
 		/* Some SPI masters need both GPIO CS & slave_select */
 		if ((spi->controller->flags & SPI_MASTER_GPIO_SS) &&
@@ -985,10 +970,9 @@ static void spi_set_cs(struct spi_device *spi, bool enable, bool force)
 		spi->controller->set_cs(spi, !enable);
 	}
 
-	if (spi->cs_gpiod || gpio_is_valid(spi->cs_gpio) ||
-	    !spi->controller->set_cs_timing) {
-		if (!activate)
-			spi_delay_exec(&spi->cs_inactive, NULL);
+	if (spi->cs_gpiod || !spi->controller->set_cs_timing) {
+		if (activate)
+			spi_delay_exec(&spi->cs_setup, NULL);
 	}
 }
 
@@ -2357,6 +2341,7 @@ int acpi_spi_count_resources(struct acpi_device *adev)
 	return count;
 }
 EXPORT_SYMBOL_GPL(acpi_spi_count_resources);
+
 static void acpi_spi_parse_apple_properties(struct acpi_device *dev,
 					    struct acpi_spi_lookup *lookup)
 {
@@ -2387,6 +2372,7 @@ static void acpi_spi_parse_apple_properties(struct acpi_device *dev,
 }
 
 static struct spi_controller *acpi_spi_find_controller_by_adev(struct acpi_device *adev);
+
 static int acpi_spi_add_resource(struct acpi_resource *ares, void *data)
 {
 	struct acpi_spi_lookup *lookup = data;
@@ -2405,6 +2391,7 @@ static int acpi_spi_add_resource(struct acpi_resource *ares, void *data)
 
 			if (lookup->index == -1 && !ctlr)
 				return -ENODEV;
+
 			status = acpi_get_handle(NULL,
 						 sb->resource_source.string_ptr,
 						 &parent_handle);
@@ -2427,6 +2414,7 @@ static int acpi_spi_add_resource(struct acpi_resource *ares, void *data)
 
 				lookup->ctlr = ctlr;
 			}
+
 			/*
 			 * ACPI DeviceSelection numbering is handled by the
 			 * host controller driver in Windows and can vary
@@ -2525,7 +2513,6 @@ struct spi_device *acpi_spi_device_alloc(struct spi_controller *ctlr,
 		return ERR_PTR(-ENOMEM);
 	}
 
-
 	ACPI_COMPANION_SET(&spi->dev, adev);
 	spi->max_speed_hz	= lookup.max_speed_hz;
 	spi->mode		|= lookup.mode;
@@ -2553,6 +2540,7 @@ static acpi_status acpi_register_spi_device(struct spi_controller *ctlr,
 		else
 			return AE_OK;
 	}
+
 	acpi_set_modalias(adev, acpi_device_hid(adev), spi->modalias,
 			  sizeof(spi->modalias));
 
@@ -2824,46 +2812,6 @@ struct spi_controller *__devm_spi_alloc_controller(struct device *dev,
 }
 EXPORT_SYMBOL_GPL(__devm_spi_alloc_controller);
 
-#ifdef CONFIG_OF
-static int of_spi_get_gpio_numbers(struct spi_controller *ctlr)
-{
-	int nb, i, *cs;
-	struct device_node *np = ctlr->dev.of_node;
-
-	if (!np)
-		return 0;
-
-	nb = of_gpio_named_count(np, "cs-gpios");
-	ctlr->num_chipselect = max_t(int, nb, ctlr->num_chipselect);
-
-	/* Return error only for an incorrectly formed cs-gpios property */
-	if (nb == 0 || nb == -ENOENT)
-		return 0;
-	else if (nb < 0)
-		return nb;
-
-	cs = devm_kcalloc(&ctlr->dev, ctlr->num_chipselect, sizeof(int),
-			  GFP_KERNEL);
-	ctlr->cs_gpios = cs;
-
-	if (!ctlr->cs_gpios)
-		return -ENOMEM;
-
-	for (i = 0; i < ctlr->num_chipselect; i++)
-		cs[i] = -ENOENT;
-
-	for (i = 0; i < nb; i++)
-		cs[i] = of_get_named_gpio(np, "cs-gpios", i);
-
-	return 0;
-}
-#else
-static int of_spi_get_gpio_numbers(struct spi_controller *ctlr)
-{
-	return 0;
-}
-#endif
-
 /**
  * spi_get_gpio_descs() - grab chip select GPIOs for the master
  * @ctlr: The SPI master to grab GPIO descriptors for
@@ -3047,8 +2995,7 @@ int spi_register_controller(struct spi_controller *ctlr)
 	 */
 	dev_set_name(&ctlr->dev, "spi%u", ctlr->bus_num);
 
-	if (!spi_controller_is_slave(ctlr)) {
-		if (ctlr->use_gpio_descriptors) {
+	if (!spi_controller_is_slave(ctlr) && ctlr->use_gpio_descriptors) {
 			status = spi_get_gpio_descs(ctlr);
 			if (status)
 				goto free_bus_id;
@@ -3057,12 +3004,6 @@ int spi_register_controller(struct spi_controller *ctlr)
 			 * supports SPI_CS_HIGH if need be.
 			 */
 			ctlr->mode_bits |= SPI_CS_HIGH;
-		} else {
-			/* Legacy code path for GPIOs from DT */
-			status = of_spi_get_gpio_numbers(ctlr);
-			if (status)
-				goto free_bus_id;
-		}
 	}
 
 	/*
@@ -3196,7 +3137,6 @@ void spi_unregister_controller(struct spi_controller *ctlr)
 	 */
 	if (!ctlr->devm_allocated)
 		put_device(&ctlr->dev);
-
 	/* free bus id */
 	mutex_lock(&board_lock);
 	if (found == ctlr)
@@ -3205,6 +3145,7 @@ void spi_unregister_controller(struct spi_controller *ctlr)
 
 	if (IS_ENABLED(CONFIG_SPI_DYNAMIC))
 		mutex_unlock(&ctlr->add_lock);
+
 }
 EXPORT_SYMBOL_GPL(spi_unregister_controller);
 
@@ -3238,7 +3179,6 @@ int spi_controller_resume(struct spi_controller *ctlr)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(spi_controller_resume);
-
 
 /*-------------------------------------------------------------------------*/
 
@@ -3544,11 +3484,6 @@ int spi_setup(struct spi_device *spi)
 	 */
 	bad_bits = spi->mode & ~(spi->controller->mode_bits | SPI_CS_WORD |
 				 SPI_NO_TX | SPI_NO_RX);
-	/* nothing prevents from working with active-high CS in case if it
-	 * is driven by GPIO.
-	 */
-	if (gpio_is_valid(spi->cs_gpio))
-		bad_bits &= ~SPI_CS_HIGH;
 	ugly_bits = bad_bits &
 		    (SPI_TX_DUAL | SPI_TX_QUAD | SPI_TX_OCTAL |
 		     SPI_RX_DUAL | SPI_RX_QUAD | SPI_RX_OCTAL);
@@ -3673,8 +3608,7 @@ static int __spi_validate(struct spi_device *spi, struct spi_message *message)
 	 * cs_change is set for each transfer.
 	 */
 	if ((spi->mode & SPI_CS_WORD) && (!(ctlr->mode_bits & SPI_CS_WORD) ||
-					  spi->cs_gpiod ||
-					  gpio_is_valid(spi->cs_gpio))) {
+					  spi->cs_gpiod)) {
 		size_t maxsize;
 		int ret;
 
