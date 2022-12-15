@@ -1610,13 +1610,32 @@ static int __spi_pump_transfer_message(struct spi_controller *ctlr,
 		}
 	}
 
+	/*
+	 * Drivers implementation of transfer_one_message() must arrange for
+	 * spi_finalize_current_message() to get called. Most drivers will do
+	 * this in the calling context, but some don't. For those cases, a
+	 * completion is used to guarantee that this function does not return
+	 * until spi_finalize_current_message() is done accessing
+	 * ctlr->cur_msg.
+	 * Use of the following two flags enable to opportunistically skip the
+	 * use of the completion since its use involves expensive spin locks.
+	 * In case of a race with the context that calls
+	 * spi_finalize_current_message() the completion will always be used,
+	 * due to strict ordering of these flags using barriers.
+	 */
+	WRITE_ONCE(ctlr->cur_msg_incomplete, true);
+	WRITE_ONCE(ctlr->cur_msg_need_completion, false);
 	reinit_completion(&ctlr->cur_msg_completion);
+	smp_wmb(); /* make these available to spi_finalize_current_message */
 	ret = ctlr->transfer_one_message(ctlr, msg);
 	if (ret) {
 		dev_err(&ctlr->dev,
 			"failed to transfer one message from queue\n");
 		return ret;
 	} else {
+		WRITE_ONCE(ctlr->cur_msg_need_completion, true);
+		smp_mb(); /* see spi_finalize_current_message()... */
+		if (READ_ONCE(ctlr->cur_msg_incomplete))
 		wait_for_completion(&ctlr->cur_msg_completion);
 	}
 
@@ -1937,7 +1956,11 @@ void spi_finalize_current_message(struct spi_controller *ctlr)
 
 	mesg->prepared = false;
 
-	complete(&ctlr->cur_msg_completion);
+	WRITE_ONCE(ctlr->cur_msg_incomplete, false);
+	smp_mb(); /* See __spi_pump_transfer_message()... */
+	if (READ_ONCE(ctlr->cur_msg_need_completion))
+		complete(&ctlr->cur_msg_completion);
+
 	trace_spi_message_done(mesg);
 
 	mesg->state = NULL;
@@ -3926,14 +3949,13 @@ static void __spi_transfer_message_noqueue(struct spi_controller *ctlr, struct s
 
 
 	was_busy = READ_ONCE(ctlr->busy);
-
 	ret = __spi_pump_transfer_message(ctlr, msg, was_busy);
 	if (ret)
 		goto out;
 
 	ctlr->cur_msg = NULL;
 	ctlr->fallback = false;
-
+	
 	if (!was_busy) {
 		kfree(ctlr->dummy_rx);
 		ctlr->dummy_rx = NULL;
@@ -4011,6 +4033,7 @@ static int __spi_sync(struct spi_device *spi, struct spi_message *message)
 		status = message->status;
 	}
 	message->context = NULL;
+
 	return status;
 }
 
