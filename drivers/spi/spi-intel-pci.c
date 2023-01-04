@@ -16,6 +16,7 @@
 #define BCR		0xdc
 #define BCR_WPD		BIT(0)
 
+
 static const struct intel_spi_boardinfo bxt_info = {
 	.type = INTEL_SPI_BXT,
 };

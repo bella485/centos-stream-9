@@ -6,8 +6,8 @@
  * Author: Mika Westerberg <mika.westerberg@linux.intel.com>
  */
 
-#ifndef INTEL_SPI_PDATA_H
-#define INTEL_SPI_PDATA_H
+#ifndef SPI_INTEL_PDATA_H
+#define SPI_INTEL_PDATA_H
 
 enum intel_spi_type {
 	INTEL_SPI_BYT = 1,
@@ -26,4 +26,4 @@ struct intel_spi_boardinfo {
 	bool writeable;
 };
 
-#endif /* INTEL_SPI_PDATA_H */
+#endif /* SPI_INTEL_PDATA_H */

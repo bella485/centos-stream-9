@@ -135,6 +135,7 @@ static const struct mtk_spi_compatible mt8183_compat = {
 	.enhance_timing = true,
 };
 
+
 /*
  * A piece of default chip info unless the platform
  * supplies it.
@@ -260,6 +261,7 @@ static int mtk_spi_prepare_message(struct spi_master *master,
 	if (mdata->dev_comp->need_pad_sel)
 		writel(mdata->pad_sel[spi->chip_select],
 		       mdata->base + SPI_PAD_SEL_REG);
+
 
 	return 0;
 }
@@ -427,14 +429,15 @@ static int mtk_spi_fifo_transfer(struct spi_master *master,
 	mtk_spi_setup_packet(master);
 
 	if (xfer->tx_buf) {
-		cnt = xfer->len / 4;
-		iowrite32_rep(mdata->base + SPI_TX_DATA_REG, xfer->tx_buf, cnt);
-		remainder = xfer->len % 4;
-		if (remainder > 0) {
-			reg_val = 0;
-			memcpy(&reg_val, xfer->tx_buf + (cnt * 4), remainder);
-			writel(reg_val, mdata->base + SPI_TX_DATA_REG);
-		}
+	cnt = xfer->len / 4;
+	iowrite32_rep(mdata->base + SPI_TX_DATA_REG, xfer->tx_buf, cnt);
+
+	remainder = xfer->len % 4;
+	if (remainder > 0) {
+		reg_val = 0;
+		memcpy(&reg_val, xfer->tx_buf + (cnt * 4), remainder);
+		writel(reg_val, mdata->base + SPI_TX_DATA_REG);
+	}
 	}
 
 	mtk_spi_enable_transfer(master);
@@ -790,9 +793,10 @@ static int mtk_spi_probe(struct platform_device *pdev)
 		goto err_put_master;
 	}
 
-	clk_disable_unprepare(mdata->spi_clk);
+		clk_disable_unprepare(mdata->spi_clk);
 
 	pm_runtime_enable(&pdev->dev);
+
 
 	if (mdata->dev_comp->need_pad_sel) {
 		if (mdata->pad_num != master->num_chipselect) {
@@ -838,7 +842,6 @@ static int mtk_spi_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "failed to register master (%d)\n", ret);
 		goto err_disable_runtime_pm;
 	}
-
 	return 0;
 
 err_disable_runtime_pm:
@@ -857,6 +860,7 @@ static int mtk_spi_remove(struct platform_device *pdev)
 	pm_runtime_disable(&pdev->dev);
 
 	mtk_spi_reset(mdata);
+
 
 	return 0;
 }
@@ -906,7 +910,7 @@ static int mtk_spi_runtime_suspend(struct device *dev)
 	struct spi_master *master = dev_get_drvdata(dev);
 	struct mtk_spi *mdata = spi_master_get_devdata(master);
 
-	clk_disable_unprepare(mdata->spi_clk);
+		clk_disable_unprepare(mdata->spi_clk);
 
 	return 0;
 }
@@ -917,7 +921,7 @@ static int mtk_spi_runtime_resume(struct device *dev)
 	struct mtk_spi *mdata = spi_master_get_devdata(master);
 	int ret;
 
-	ret = clk_prepare_enable(mdata->spi_clk);
+		ret = clk_prepare_enable(mdata->spi_clk);
 	if (ret < 0) {
 		dev_err(dev, "failed to enable spi_clk (%d)\n", ret);
 		return ret;
