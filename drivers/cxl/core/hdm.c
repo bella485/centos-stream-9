@@ -184,6 +184,16 @@ struct cxl_hdm *devm_cxl_setup_hdm(struct cxl_port *port,
 		return ERR_PTR(-ENXIO);
 	}
 
+	/*
+	 * Now that the hdm capability is parsed, decide if range
+	 * register emulation is needed and fixup cxlhdm accordingly.
+	 */
+	if (should_emulate_decoders(info)) {
+		dev_dbg(dev, "Fallback map %d range register%s\n", info->ranges,
+			info->ranges > 1 ? "s" : "");
+		cxlhdm->decoder_count = info->ranges;
+	}
+
 	return cxlhdm;
 }
 EXPORT_SYMBOL_NS_GPL(devm_cxl_setup_hdm, CXL);
@@ -761,42 +771,6 @@ static int cxl_setup_hdm_decoder_from_dvsec(struct cxl_port *port,
 	port->commit_end = cxld->id;
 
 	return 0;
-}
-
-static bool should_emulate_decoders(struct cxl_endpoint_dvsec_info *info)
-{
-	struct cxl_hdm *cxlhdm;
-	void __iomem *hdm;
-	u32 ctrl;
-	int i;
-
-	if (!info)
-		return false;
-
-	cxlhdm = dev_get_drvdata(&info->port->dev);
-	hdm = cxlhdm->regs.hdm_decoder;
-
-	if (!hdm)
-		return true;
-
-	/*
-	 * If HDM decoders are present and the driver is in control of
-	 * Mem_Enable skip DVSEC based emulation
-	 */
-	if (!info->mem_enabled)
-		return false;
-
-	/*
-	 * If any decoders are committed already, there should not be any
-	 * emulated DVSEC decoders.
-	 */
-	for (i = 0; i < cxlhdm->decoder_count; i++) {
-		ctrl = readl(hdm + CXL_HDM_DECODER0_CTRL_OFFSET(i));
-		if (FIELD_GET(CXL_HDM_DECODER0_CTRL_COMMITTED, ctrl))
-			return false;
-	}
-
-	return true;
 }
 
 static int init_hdm_decoder(struct cxl_port *port, struct cxl_decoder *cxld,
