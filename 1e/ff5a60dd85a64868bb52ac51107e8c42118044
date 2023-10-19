@@ -1,2 +1,4 @@
-Z-JIRA: https://issues.redhat.com/browse/RHEL-10723
-Z-JIRA: https://issues.redhat.com/browse/RHEL-10725
+Y-Commit: 90f01aa4acdb6a33c329b7961563a5b029fefa4f
+Bugzilla: 2221465 2221466
+Z-JIRA: RHEL-10723 RHEL-10725
+CVE: CVE-2023-3567
