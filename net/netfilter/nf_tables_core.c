@@ -344,6 +344,7 @@ static struct nft_expr_type *nft_basic_types[] = {
 	&nft_exthdr_type,
 	&nft_last_type,
 	&nft_counter_type,
+	&nft_objref_type,
 	&nft_inner_type,
 };
 

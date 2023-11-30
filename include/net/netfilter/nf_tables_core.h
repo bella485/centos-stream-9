@@ -18,6 +18,7 @@ extern struct nft_expr_type nft_meta_type;
 extern struct nft_expr_type nft_rt_type;
 extern struct nft_expr_type nft_exthdr_type;
 extern struct nft_expr_type nft_last_type;
+extern struct nft_expr_type nft_objref_type;
 extern struct nft_expr_type nft_inner_type;
 
 #ifdef CONFIG_NETWORK_SECMARK
