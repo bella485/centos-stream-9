@@ -71,6 +71,15 @@ static inline u32 nft_cmp_fast_mask(unsigned int len)
 extern const struct nft_expr_ops nft_cmp_fast_ops;
 extern const struct nft_expr_ops nft_cmp16_fast_ops;
 
+struct nft_ct {
+	enum nft_ct_keys	key:8;
+	enum ip_conntrack_dir	dir:8;
+	union {
+		u8		dreg;
+		u8		sreg;
+	};
+};
+
 struct nft_payload {
 	enum nft_payload_bases	base:8;
 	u8			offset;
@@ -160,6 +169,8 @@ void nft_rt_get_eval(const struct nft_expr *expr,
 		     struct nft_regs *regs, const struct nft_pktinfo *pkt);
 void nft_counter_eval(const struct nft_expr *expr, struct nft_regs *regs,
                       const struct nft_pktinfo *pkt);
+void nft_ct_get_fast_eval(const struct nft_expr *expr,
+			  struct nft_regs *regs, const struct nft_pktinfo *pkt);
 
 enum {
 	NFT_PAYLOAD_CTX_INNER_TUN	= (1 << 0),
