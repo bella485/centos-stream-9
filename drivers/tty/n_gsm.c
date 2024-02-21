@@ -855,7 +855,7 @@ static void gsm_dlci_clear_queues(struct gsm_mux *gsm, struct gsm_dlci *dlci)
 
 static inline void gsm_response(struct gsm_mux *gsm, int addr, int control)
 {
-	gsm_send(gsm, addr, 0, control);
+	gsm_send(gsm, addr, 1, control);
 }
 
 /**
