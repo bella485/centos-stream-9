@@ -367,6 +367,7 @@ static void bnx2_setup_cnic_irq_info(struct bnx2 *bp)
 	cp->irq_arr[0].status_blk = (void *)
 		((unsigned long) bnapi->status_blk.msi +
 		(BNX2_SBLK_MSIX_ALIGN_SIZE * sb_id));
+	cp->irq_arr[0].status_blk_map = bp->status_blk_mapping;
 	cp->irq_arr[0].status_blk_num = sb_id;
 	cp->num_irq = 1;
 }
@@ -837,6 +838,7 @@ bnx2_alloc_stats_blk(struct net_device *dev)
 						 BNX2_SBLK_MSIX_ALIGN_SIZE);
 	bp->status_stats_size = status_blk_size +
 				sizeof(struct statistics_block);
+	bp->status_stats_size = PAGE_ALIGN(bp->status_stats_size);
 	status_blk = dma_alloc_coherent(&bp->pdev->dev, bp->status_stats_size,
 					&bp->status_blk_mapping, GFP_KERNEL);
 	if (!status_blk)

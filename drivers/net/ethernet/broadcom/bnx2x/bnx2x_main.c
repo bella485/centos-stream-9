@@ -8270,10 +8270,10 @@ void bnx2x_free_mem_cnic(struct bnx2x *bp)
 
 	if (!CHIP_IS_E1x(bp))
 		BNX2X_PCI_FREE(bp->cnic_sb.e2_sb, bp->cnic_sb_mapping,
-			       sizeof(struct host_hc_status_block_e2));
+			       PAGE_ALIGN(sizeof(struct host_hc_status_block_e2)));
 	else
 		BNX2X_PCI_FREE(bp->cnic_sb.e1x_sb, bp->cnic_sb_mapping,
-			       sizeof(struct host_hc_status_block_e1x));
+			       PAGE_ALIGN(sizeof(struct host_hc_status_block_e1x)));
 
 	BNX2X_PCI_FREE(bp->t2, bp->t2_mapping, SRC_T2_SZ);
 }
@@ -8316,12 +8316,12 @@ int bnx2x_alloc_mem_cnic(struct bnx2x *bp)
 	if (!CHIP_IS_E1x(bp)) {
 		/* size = the status block + ramrod buffers */
 		bp->cnic_sb.e2_sb = BNX2X_PCI_ALLOC(&bp->cnic_sb_mapping,
-						    sizeof(struct host_hc_status_block_e2));
+						    PAGE_ALIGN(sizeof(struct host_hc_status_block_e2)));
 		if (!bp->cnic_sb.e2_sb)
 			goto alloc_mem_err;
 	} else {
 		bp->cnic_sb.e1x_sb = BNX2X_PCI_ALLOC(&bp->cnic_sb_mapping,
-						     sizeof(struct host_hc_status_block_e1x));
+						     PAGE_ALIGN(sizeof(struct host_hc_status_block_e1x)));
 		if (!bp->cnic_sb.e1x_sb)
 			goto alloc_mem_err;
 	}
@@ -14900,9 +14900,11 @@ void bnx2x_setup_cnic_irq_info(struct bnx2x *bp)
 	else
 		cp->irq_arr[0].status_blk = (void *)bp->cnic_sb.e1x_sb;
 
+	cp->irq_arr[0].status_blk_map = bp->cnic_sb_mapping;
 	cp->irq_arr[0].status_blk_num =  bnx2x_cnic_fw_sb_id(bp);
 	cp->irq_arr[0].status_blk_num2 = bnx2x_cnic_igu_sb_id(bp);
 	cp->irq_arr[1].status_blk = bp->def_status_blk;
+	cp->irq_arr[1].status_blk_map = bp->def_status_blk_mapping;
 	cp->irq_arr[1].status_blk_num = DEF_SB_ID;
 	cp->irq_arr[1].status_blk_num2 = DEF_SB_IGU_ID;
 
