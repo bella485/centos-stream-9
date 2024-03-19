@@ -459,6 +459,29 @@ config OPEN_DICE
 
 	  If unsure, say N.
 
+config MEMSCAV
+	tristate "Memory scavenger driver"
+	depends on SYSFS
+	default n
+	help
+	  This driver creates sysfs entries that allows userspace to reclaim
+	  memory that has been limited (through the kernel parameter "mem=") to
+	  be reclaimed. It is similar to /sys/devices/system/memory/probe
+	  exposed by ARCH_MEMORY_PROBE, but takes a size as argument and checks
+	  against the memory layout (either the device-tree "/memory" node or
+	  the EFI memory map) available for regions hidden at boot.
+
+	  If unsure, say N.
+
+config MEMSCAV_DEBUG
+	bool "Memory scavenger driver debug"
+	depends on MEMSCAV
+	default n
+	help
+	  This option enables additional debugging code for the memscav driver.
+
+	  If unsure, say N.
+
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"
