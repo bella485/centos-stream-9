@@ -284,7 +284,7 @@ kci_test_addrlft()
 	done
 
 	sleep 5
-	run_cmd_grep "10.23.11." ip addr show dev "$devdummy"
+	run_cmd_grep_fail "10.23.11." ip addr show dev "$devdummy"
 	if [ $? -eq 0 ]; then
 		end_test "FAIL: preferred_lft addresses remaining"
 		check_err 1
