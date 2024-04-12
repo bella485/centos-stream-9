@@ -1686,6 +1686,10 @@ cd configs
 
 # Drop some necessary files from the source dir into the buildroot
 cp $RPM_SOURCE_DIR/kernel-*.config .
+%if %{with_automotive} && 0%{?rhel}
+	echo "Forcing CONFIG_MODULE_SIG_FORCE=y for automotive build"
+	sed -i "s|# CONFIG_MODULE_SIG_FORCE is not set|CONFIG_MODULE_SIG_FORCE=y|g" kernel-automotive*.config
+%endif
 cp %{SOURCE80} .
 # merge.pl
 cp %{SOURCE3000} .
