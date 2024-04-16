@@ -2245,6 +2245,9 @@ static void add_staging_flag(struct buffer *b, const char *name)
 {
 	if (strstarts(name, "drivers/staging"))
 		buf_printf(b, "\nMODULE_INFO(staging, \"Y\");\n");
+
+	if (strstarts(mod->name, "tools/testing"))
+		buf_printf(b, "\nMODULE_INFO(test, \"Y\");\n");
 }
 
 /**
