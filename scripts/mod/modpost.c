@@ -2317,6 +2317,9 @@ static void write_buf(struct buffer *b, const char *fname)
 {
 	FILE *file;
 
+	if (error_occurred)
+		return;
+
 	file = fopen(fname, "w");
 	if (!file) {
 		perror(fname);
