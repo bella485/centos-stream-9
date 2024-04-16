@@ -134,9 +134,6 @@
 #define SLAB_RECLAIM_ACCOUNT	((slab_flags_t __force)0x00020000U)
 #define SLAB_TEMPORARY		SLAB_RECLAIM_ACCOUNT	/* Objects are short-lived */
 
-/* Slab deactivation flag */
-#define SLAB_DEACTIVATED	((slab_flags_t __force)0x10000000U)
-
 /*
  * ZERO_SIZE_PTR will be returned for zero sized kmalloc requests.
  *
@@ -157,7 +154,6 @@ struct mem_cgroup;
 /*
  * struct kmem_cache related prototypes
  */
-void __init kmem_cache_init(void);
 bool slab_is_available(void);
 
 struct kmem_cache *kmem_cache_create(const char *name, unsigned int size,
@@ -347,12 +343,17 @@ enum kmalloc_cache_type {
 #endif
 #ifndef CONFIG_MEMCG_KMEM
 	KMALLOC_CGROUP = KMALLOC_NORMAL,
-#else
-	KMALLOC_CGROUP,
 #endif
+#ifdef CONFIG_SLUB_TINY
+	KMALLOC_RECLAIM = KMALLOC_NORMAL,
+#else
 	KMALLOC_RECLAIM,
+#endif
 #ifdef CONFIG_ZONE_DMA
 	KMALLOC_DMA,
+#endif
+#ifdef CONFIG_MEMCG_KMEM
+	KMALLOC_CGROUP,
 #endif
 	NR_KMALLOC_TYPES
 };
@@ -439,8 +440,7 @@ static __always_inline unsigned int __kmalloc_index(size_t size,
 	if (size <= 1024 * 1024) return 20;
 	if (size <=  2 * 1024 * 1024) return 21;
 
-	if ((IS_ENABLED(CONFIG_CC_IS_GCC) || CONFIG_CLANG_VERSION >= 110000)
-	    && !IS_ENABLED(CONFIG_PROFILE_ALL_BRANCHES) && size_is_constant)
+	if (!IS_ENABLED(CONFIG_PROFILE_ALL_BRANCHES) && size_is_constant)
 		BUILD_BUG_ON_MSG(1, "unexpected size in kmalloc_index()");
 	else
 		BUG();
@@ -453,7 +453,18 @@ static_assert(PAGE_SHIFT <= 20);
 #endif /* !CONFIG_SLOB */
 
 void *__kmalloc(size_t size, gfp_t flags) __assume_kmalloc_alignment __alloc_size(1);
-void *kmem_cache_alloc(struct kmem_cache *s, gfp_t flags) __assume_slab_alignment __malloc;
+
+/**
+ * kmem_cache_alloc - Allocate an object
+ * @cachep: The cache to allocate from.
+ * @flags: See kmalloc().
+ *
+ * Allocate an object from this cache.
+ * See kmem_cache_zalloc() for a shortcut of adding __GFP_ZERO to flags.
+ *
+ * Return: pointer to the new object or %NULL in case of error
+ */
+void *kmem_cache_alloc(struct kmem_cache *cachep, gfp_t flags) __assume_slab_alignment __malloc;
 void *kmem_cache_alloc_lru(struct kmem_cache *s, struct list_lru *lru,
 			   gfp_t gfpflags) __assume_slab_alignment __malloc;
 void kmem_cache_free(struct kmem_cache *s, void *objp);
@@ -495,9 +506,9 @@ void *kmalloc_large_node(size_t size, gfp_t flags, int node) __assume_page_align
 							     __alloc_size(1);
 
 /**
- * kmalloc - allocate memory
+ * kmalloc - allocate kernel memory
  * @size: how many bytes of memory are required.
- * @flags: the type of memory to allocate.
+ * @flags: describe the allocation context
  *
  * kmalloc is the normal method of allocating memory
  * for objects smaller than page size in the kernel.
@@ -524,11 +535,11 @@ void *kmalloc_large_node(size_t size, gfp_t flags, int node) __assume_page_align
  * %GFP_ATOMIC
  *	Allocation will not sleep.  May use emergency pools.
  *
- * %GFP_HIGHUSER
- *	Allocate memory from high memory on behalf of user.
- *
  * Also it is possible to set different flags by OR'ing
  * in one or more of the following additional @flags:
+ *
+ * %__GFP_ZERO
+ *	Zero the allocated memory before returning. Also see kzalloc().
  *
  * %__GFP_HIGH
  *	This allocation has high priority and may use emergency pools.
