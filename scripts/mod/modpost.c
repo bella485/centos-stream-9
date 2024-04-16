@@ -167,16 +167,17 @@ char *get_line(char **stringp)
 }
 
 /* A list of all modules we processed */
-static struct module *modules;
+LIST_HEAD(modules);
 
 static struct module *find_module(const char *modname)
 {
 	struct module *mod;
 
-	for (mod = modules; mod; mod = mod->next)
+	list_for_each_entry(mod, &modules, list) {
 		if (strcmp(mod->name, modname) == 0)
-			break;
-	return mod;
+			return mod;
+	}
+	return NULL;
 }
 
 static struct module *new_module(const char *modname)
@@ -186,7 +187,6 @@ static struct module *new_module(const char *modname)
 	mod = NOFAIL(malloc(sizeof(*mod) + strlen(modname) + 1));
 	memset(mod, 0, sizeof(*mod));
 
-	/* add to list */
 	strcpy(mod->name, modname);
 	mod->is_vmlinux = (strcmp(modname, "vmlinux") == 0);
 
@@ -197,8 +197,7 @@ static struct module *new_module(const char *modname)
 	 */
 	mod->is_gpl_compatible = true;
 
-	mod->next = modules;
-	modules = mod;
+	list_add_tail(&mod->list, &modules);
 
 	return mod;
 }
@@ -2467,7 +2466,7 @@ static void write_namespace_deps_files(const char *fname)
 	struct namespace_list *ns;
 	struct buffer ns_deps_buf = {};
 
-	for (mod = modules; mod; mod = mod->next) {
+	list_for_each_entry(mod, &modules, list) {
 
 		if (mod->from_dump || !mod->missing_namespaces)
 			continue;
@@ -2558,7 +2557,7 @@ int main(int argc, char **argv)
 	if (files_source)
 		read_symbols_from_files(files_source);
 
-	for (mod = modules; mod; mod = mod->next) {
+	list_for_each_entry(mod, &modules, list) {
 		char fname[PATH_MAX];
 		int ret;
 
