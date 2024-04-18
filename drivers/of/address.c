@@ -95,10 +95,16 @@ static int of_bus_default_translate(__be32 *addr, u64 offset, int na)
 	return 0;
 }
 
+static unsigned int of_bus_default_flags_get_flags(const __be32 *addr)
+{
+	return of_read_number(addr, 1);
+}
+
 static unsigned int of_bus_default_get_flags(const __be32 *addr)
 {
 	return IORESOURCE_MEM;
 }
+
 
 #ifdef CONFIG_PCI
 static unsigned int of_bus_pci_get_flags(const __be32 *addr)
@@ -229,9 +235,6 @@ int of_pci_range_to_resource(struct of_pci_range *range,
 	res->parent = res->child = res->sibling = NULL;
 	res->name = np->full_name;
 
-	if (!IS_ENABLED(CONFIG_PCI))
-		return -ENOSYS;
-
 	if (res->flags & IORESOURCE_IO) {
 		unsigned long port;
 		err = pci_register_io_range(&np->fwnode, range->cpu_addr,
@@ -262,6 +265,34 @@ invalid_range:
 	return err;
 }
 EXPORT_SYMBOL(of_pci_range_to_resource);
+
+/*
+ * of_range_to_resource - Create a resource from a ranges entry
+ * @np:		device node where the range belongs to
+ * @index:	the 'ranges' index to convert to a resource
+ * @res:	pointer to a valid resource that will be updated to
+ *              reflect the values contained in the range.
+ *
+ * Returns ENOENT if the entry is not found or EINVAL if the range cannot be
+ * converted to resource.
+ */
+int of_range_to_resource(struct device_node *np, int index, struct resource *res)
+{
+	int ret, i = 0;
+	struct of_range_parser parser;
+	struct of_range range;
+
+	ret = of_range_parser_init(&parser, np);
+	if (ret)
+		return ret;
+
+	for_each_of_range(&parser, &range)
+		if (i++ == index)
+			return of_pci_range_to_resource(&range, np, res);
+
+	return -ENOENT;
+}
+EXPORT_SYMBOL(of_range_to_resource);
 
 /*
  * ISA bus specific translator
@@ -319,6 +350,11 @@ static unsigned int of_bus_isa_get_flags(const __be32 *addr)
 	return flags;
 }
 
+static int of_bus_default_flags_match(struct device_node *np)
+{
+	return of_bus_n_addr_cells(np) == 3;
+}
+
 /*
  * Array of bus specific translators
  */
@@ -347,6 +383,17 @@ static struct of_bus of_busses[] = {
 		.translate = of_bus_isa_translate,
 		.has_flags = true,
 		.get_flags = of_bus_isa_get_flags,
+	},
+	/* Default with flags cell */
+	{
+		.name = "default-flags",
+		.addresses = "reg",
+		.match = of_bus_default_flags_match,
+		.count_cells = of_bus_default_count_cells,
+		.map = of_bus_default_map,
+		.translate = of_bus_default_translate,
+		.has_flags = true,
+		.get_flags = of_bus_default_flags_get_flags,
 	},
 	/* Default */
 	{
@@ -711,6 +758,29 @@ const __be32 *__of_get_address(struct device_node *dev, int index, int bar_no,
 }
 EXPORT_SYMBOL(__of_get_address);
 
+/**
+ * of_property_read_reg - Retrieve the specified "reg" entry index without translating
+ * @np: device tree node for which to retrieve "reg" from
+ * @idx: "reg" entry index to read
+ * @addr: return value for the untranslated address
+ * @size: return value for the entry size
+ *
+ * Returns -EINVAL if "reg" is not found. Returns 0 on success with addr and
+ * size values filled in.
+ */
+int of_property_read_reg(struct device_node *np, int idx, u64 *addr, u64 *size)
+{
+	const __be32 *prop = of_get_address(np, idx, size, NULL);
+
+	if (!prop)
+		return -EINVAL;
+
+	*addr = of_read_number(prop, of_n_addr_cells(np));
+
+	return 0;
+}
+EXPORT_SYMBOL(of_property_read_reg);
+
 static int parser_init(struct of_pci_range_parser *parser,
 			struct device_node *node, const char *name)
 {
@@ -1004,8 +1074,19 @@ int of_dma_get_range(struct device_node *np, const struct bus_dma_region **map)
 	}
 
 	of_dma_range_parser_init(&parser, node);
-	for_each_of_range(&parser, &range)
+	for_each_of_range(&parser, &range) {
+		if (range.cpu_addr == OF_BAD_ADDR) {
+			pr_err("translation of DMA address(%llx) to CPU address failed node(%pOF)\n",
+			       range.bus_addr, node);
+			continue;
+		}
 		num_ranges++;
+	}
+
+	if (!num_ranges) {
+		ret = -EINVAL;
+		goto out;
+	}
 
 	r = kcalloc(num_ranges + 1, sizeof(*r), GFP_KERNEL);
 	if (!r) {
@@ -1014,18 +1095,16 @@ int of_dma_get_range(struct device_node *np, const struct bus_dma_region **map)
 	}
 
 	/*
-	 * Record all info in the generic DMA ranges array for struct device.
+	 * Record all info in the generic DMA ranges array for struct device,
+	 * returning an error if we don't find any parsable ranges.
 	 */
 	*map = r;
 	of_dma_range_parser_init(&parser, node);
 	for_each_of_range(&parser, &range) {
 		pr_debug("dma_addr(%llx) cpu_addr(%llx) size(%llx)\n",
 			 range.bus_addr, range.cpu_addr, range.size);
-		if (range.cpu_addr == OF_BAD_ADDR) {
-			pr_err("translation of DMA address(%llx) to CPU address failed node(%pOF)\n",
-			       range.bus_addr, node);
+		if (range.cpu_addr == OF_BAD_ADDR)
 			continue;
-		}
 		r->cpu_start = range.cpu_addr;
 		r->dma_start = range.bus_addr;
 		r->size = range.size;
