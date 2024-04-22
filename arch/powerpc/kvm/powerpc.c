@@ -2490,3 +2490,4 @@ void kvmppc_init_lpid(unsigned long nr_lpids_param)
 EXPORT_SYMBOL_GPL(kvmppc_init_lpid);
 
 EXPORT_TRACEPOINT_SYMBOL_GPL(kvm_ppc_instr);
+
