@@ -56,4 +56,8 @@ static inline void cfi_module_remove(struct module *mod, unsigned long base_addr
 #define __CFI_ADDRESSABLE(fn, __attr)
 #endif
 
+#ifndef CFI_NOSEAL
+#define CFI_NOSEAL(x)
+#endif
+
 #endif /* _LINUX_CFI_H */
