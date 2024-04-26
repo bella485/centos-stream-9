@@ -1800,7 +1800,9 @@ done
 %endif
 
 %if %{with_werror}
-  sed -i "s/# CONFIG_WERROR is not set/CONFIG_WERROR=y/" "$i"
+  if [ "$(gcc -dumpfullversion | cut -d. -f1)" = "11" ]; then
+    sed -i "s/# CONFIG_WERROR is not set/CONFIG_WERROR=y/" "$i"
+  fi
 %endif
 
 cp %{SOURCE81} .
