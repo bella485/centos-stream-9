@@ -51,6 +51,7 @@ enum netdev_xdp_rx_metadata {
 
 	/* private: */
 	NETDEV_XDP_RX_METADATA_MASK = 3,
+	NETDEV_XDP_RX_METADATA_VLAN_TAG = 4,
 };
 
 /**
