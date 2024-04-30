@@ -136,7 +136,7 @@ static int __try_to_reclaim_swap(struct swap_info_struct *si,
 	int ret = 0;
 
 	folio = filemap_get_folio(swap_address_space(entry), offset);
-	if (!folio)
+	if (IS_ERR(folio))
 		return 0;
 	/*
 	 * When this function is called from scan_swap_map_slots() and it's
@@ -1100,8 +1100,6 @@ start_over:
 		spin_unlock(&si->lock);
 		if (n_ret || size == SWAPFILE_CLUSTER)
 			goto check_out;
-		pr_debug("scan_swap_map of si %d failed to find offset\n",
-			si->type);
 		cond_resched();
 
 		spin_lock(&swap_avail_lock);
@@ -1766,7 +1764,7 @@ static int unuse_pte(struct vm_area_struct *vma, pmd_t *pmd,
 	struct page *swapcache;
 	spinlock_t *ptl;
 	pte_t *pte, new_pte;
-	bool hwposioned = false;
+	bool hwpoisoned = PageHWPoison(page);
 	int ret = 1;
 
 	swapcache = page;
@@ -1774,7 +1772,7 @@ static int unuse_pte(struct vm_area_struct *vma, pmd_t *pmd,
 	if (unlikely(!page))
 		return -ENOMEM;
 	else if (unlikely(PTR_ERR(page) == -EHWPOISON))
-		hwposioned = true;
+		hwpoisoned = true;
 
 	pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
 	if (unlikely(!pte || !pte_same_as_swp(*pte, swp_entry_to_pte(entry)))) {
@@ -1782,11 +1780,11 @@ static int unuse_pte(struct vm_area_struct *vma, pmd_t *pmd,
 		goto out;
 	}
 
-	if (unlikely(hwposioned || !PageUptodate(page))) {
+	if (unlikely(hwpoisoned || !PageUptodate(page))) {
 		swp_entry_t swp_entry;
 
 		dec_mm_counter(vma->vm_mm, MM_SWAPENTS);
-		if (hwposioned) {
+		if (hwpoisoned) {
 			swp_entry = make_hwpoison_entry(swapcache);
 			page = swapcache;
 		} else {
@@ -2101,7 +2099,7 @@ retry:
 
 		entry = swp_entry(type, i);
 		folio = filemap_get_folio(swap_address_space(entry), i);
-		if (!folio)
+		if (IS_ERR(folio))
 			continue;
 
 		/*
@@ -3642,12 +3640,12 @@ static void free_swap_count_continuations(struct swap_info_struct *si)
 }
 
 #if defined(CONFIG_MEMCG) && defined(CONFIG_BLK_CGROUP)
-void __cgroup_throttle_swaprate(struct page *page, gfp_t gfp_mask)
+void __folio_throttle_swaprate(struct folio *folio, gfp_t gfp)
 {
 	struct swap_info_struct *si, *next;
-	int nid = page_to_nid(page);
+	int nid = folio_nid(folio);
 
-	if (!(gfp_mask & __GFP_IO))
+	if (!(gfp & __GFP_IO))
 		return;
 
 	if (!blk_cgroup_congested())

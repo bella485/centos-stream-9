@@ -18,6 +18,7 @@
 #include <linux/migrate.h>
 #include <linux/mm_inline.h>
 #include <linux/sched/mm.h>
+#include <linux/shmem_fs.h>
 
 #include <asm/mmu_context.h>
 #include <asm/tlbflush.h>
@@ -123,6 +124,9 @@ retry:
  */
 struct folio *try_grab_folio(struct page *page, int refs, unsigned int flags)
 {
+	if (unlikely(!(flags & FOLL_PCI_P2PDMA) && is_pci_p2pdma_page(page)))
+		return NULL;
+
 	if (flags & FOLL_GET)
 		return try_get_folio(page, refs);
 	else if (flags & FOLL_PIN) {
@@ -212,9 +216,11 @@ int __must_check try_grab_page(struct page *page, unsigned int flags)
 {
 	struct folio *folio = page_folio(page);
 
-	WARN_ON_ONCE((flags & (FOLL_GET | FOLL_PIN)) == (FOLL_GET | FOLL_PIN));
 	if (WARN_ON_ONCE(folio_ref_count(folio) <= 0))
 		return -ENOMEM;
+
+	if (unlikely(!(flags & FOLL_PCI_P2PDMA) && is_pci_p2pdma_page(page)))
+		return -EREMOTEIO;
 
 	if (flags & FOLL_GET)
 		folio_ref_inc(folio);
@@ -546,7 +552,7 @@ static struct page *follow_page_pte(struct vm_area_struct *vma,
 	pte = *ptep;
 	if (!pte_present(pte))
 		goto no_page;
-	if (pte_protnone(pte) && !gup_can_follow_protnone(flags))
+	if (pte_protnone(pte) && !gup_can_follow_protnone(vma, flags))
 		goto no_page;
 
 	page = vm_normal_page(vma, address, pte);
@@ -602,6 +608,7 @@ static struct page *follow_page_pte(struct vm_area_struct *vma,
 		page = ERR_PTR(ret);
 		goto out;
 	}
+
 	/*
 	 * We need to make the page accessible if and only if we are going
 	 * to access its content (the FOLL_PIN case).  Please see
@@ -662,7 +669,7 @@ static struct page *follow_pmd_mask(struct vm_area_struct *vma,
 	if (likely(!pmd_trans_huge(pmdval)))
 		return follow_page_pte(vma, address, pmd, flags, &ctx->pgmap);
 
-	if (pmd_protnone(pmdval) && !gup_can_follow_protnone(flags))
+	if (pmd_protnone(pmdval) && !gup_can_follow_protnone(vma, flags))
 		return no_page_table(vma, flags);
 
 	ptl = pmd_lock(mm, pmd);
@@ -796,9 +803,13 @@ struct page *follow_page(struct vm_area_struct *vma, unsigned long address,
 	if (vma_is_secretmem(vma))
 		return NULL;
 
-	if (foll_flags & FOLL_PIN)
+	if (WARN_ON_ONCE(foll_flags & FOLL_PIN))
 		return NULL;
 
+	/*
+	 * We never set FOLL_HONOR_NUMA_FAULT because callers don't expect
+	 * to fail on PROT_NONE-mapped pages.
+	 */
 	page = follow_page_mask(vma, address, foll_flags, &ctx);
 	if (ctx.pgmap)
 		put_dev_pagemap(ctx.pgmap);
@@ -859,9 +870,9 @@ unmap:
 }
 
 /*
- * mmap_lock must be held on entry.  If @locked != NULL and *@flags
- * does not include FOLL_NOWAIT, the mmap_lock may be released.  If it
- * is, *@locked will be set to 0 and -EBUSY returned.
+ * mmap_lock must be held on entry.  If @flags has FOLL_UNLOCKABLE but not
+ * FOLL_NOWAIT, the mmap_lock may be released.  If it is, *@locked will be set
+ * to 0 and -EBUSY returned.
  */
 static int faultin_page(struct vm_area_struct *vma,
 		unsigned long address, unsigned int *flags, bool unshare,
@@ -876,7 +887,7 @@ static int faultin_page(struct vm_area_struct *vma,
 		fault_flags |= FAULT_FLAG_WRITE;
 	if (*flags & FOLL_REMOTE)
 		fault_flags |= FAULT_FLAG_REMOTE;
-	if (locked) {
+	if (*flags & FOLL_UNLOCKABLE) {
 		fault_flags |= FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
 		/*
 		 * FAULT_FLAG_INTERRUPTIBLE is opt-in. GUP callers must set
@@ -910,8 +921,8 @@ static int faultin_page(struct vm_area_struct *vma,
 		 * mmap lock in the page fault handler. Sanity check this.
 		 */
 		WARN_ON_ONCE(fault_flags & FAULT_FLAG_RETRY_NOWAIT);
-		if (locked)
-			*locked = 0;
+		*locked = 0;
+
 		/*
 		 * We should do the same as VM_FAULT_RETRY, but let's not
 		 * return -EBUSY since that's not reflecting the reality of
@@ -931,7 +942,7 @@ static int faultin_page(struct vm_area_struct *vma,
 	}
 
 	if (ret & VM_FAULT_RETRY) {
-		if (locked && !(fault_flags & FAULT_FLAG_RETRY_NOWAIT))
+		if (!(fault_flags & FAULT_FLAG_RETRY_NOWAIT))
 			*locked = 0;
 		return -EBUSY;
 	}
@@ -939,25 +950,70 @@ static int faultin_page(struct vm_area_struct *vma,
 	return 0;
 }
 
+/*
+ * Writing to file-backed mappings which require folio dirty tracking using GUP
+ * is a fundamentally broken operation, as kernel write access to GUP mappings
+ * do not adhere to the semantics expected by a file system.
+ *
+ * Consider the following scenario:-
+ *
+ * 1. A folio is written to via GUP which write-faults the memory, notifying
+ *    the file system and dirtying the folio.
+ * 2. Later, writeback is triggered, resulting in the folio being cleaned and
+ *    the PTE being marked read-only.
+ * 3. The GUP caller writes to the folio, as it is mapped read/write via the
+ *    direct mapping.
+ * 4. The GUP caller, now done with the page, unpins it and sets it dirty
+ *    (though it does not have to).
+ *
+ * This results in both data being written to a folio without writenotify, and
+ * the folio being dirtied unexpectedly (if the caller decides to do so).
+ */
+static bool writable_file_mapping_allowed(struct vm_area_struct *vma,
+					  unsigned long gup_flags)
+{
+	/*
+	 * If we aren't pinning then no problematic write can occur. A long term
+	 * pin is the most egregious case so this is the case we disallow.
+	 */
+	if ((gup_flags & (FOLL_PIN | FOLL_LONGTERM)) !=
+	    (FOLL_PIN | FOLL_LONGTERM))
+		return true;
+
+	/*
+	 * If the VMA does not require dirty tracking then no problematic write
+	 * can occur either.
+	 */
+	return !vma_needs_dirty_tracking(vma);
+}
+
 static int check_vma_flags(struct vm_area_struct *vma, unsigned long gup_flags)
 {
 	vm_flags_t vm_flags = vma->vm_flags;
 	int write = (gup_flags & FOLL_WRITE);
 	int foreign = (gup_flags & FOLL_REMOTE);
+	bool vma_anon = vma_is_anonymous(vma);
 
 	if (vm_flags & (VM_IO | VM_PFNMAP))
 		return -EFAULT;
 
-	if (gup_flags & FOLL_ANON && !vma_is_anonymous(vma))
+	if ((gup_flags & FOLL_ANON) && !vma_anon)
 		return -EFAULT;
 
 	if ((gup_flags & FOLL_LONGTERM) && vma_is_fsdax(vma))
+		return -EOPNOTSUPP;
+
+	if ((gup_flags & FOLL_LONGTERM) && (gup_flags & FOLL_PCI_P2PDMA))
 		return -EOPNOTSUPP;
 
 	if (vma_is_secretmem(vma))
 		return -EFAULT;
 
 	if (write) {
+		if (!vma_anon &&
+		    !writable_file_mapping_allowed(vma, gup_flags))
+			return -EFAULT;
+
 		if (!(vm_flags & VM_WRITE)) {
 			if (!(gup_flags & FOLL_FORCE))
 				return -EFAULT;
@@ -1031,7 +1087,7 @@ static int check_vma_flags(struct vm_area_struct *vma, unsigned long gup_flags)
  * This does not guarantee that the page exists in the user mappings when
  * __get_user_pages returns, and there may even be a completely different
  * page there in some cases (eg. if mmapped pagecache has been invalidated
- * and subsequently re faulted). However it does guarantee that the page
+ * and subsequently re-faulted). However it does guarantee that the page
  * won't be freed completely. And mostly callers simply care that the page
  * contains data that was valid *at some point in time*. Typically, an IO
  * or similar operation cannot guarantee anything stronger anyway because
@@ -1042,14 +1098,12 @@ static int check_vma_flags(struct vm_area_struct *vma, unsigned long gup_flags)
  * appropriate) must be called after the page is finished with, and
  * before put_page is called.
  *
- * If @locked != NULL, *@locked will be set to 0 when mmap_lock is
- * released by an up_read().  That can happen if @gup_flags does not
- * have FOLL_NOWAIT.
+ * If FOLL_UNLOCKABLE is set without FOLL_NOWAIT then the mmap_lock may
+ * be released. If this happens *@locked will be set to 0 on return.
  *
- * A caller using such a combination of @locked and @gup_flags
- * must therefore hold the mmap_lock for reading only, and recognize
- * when it's been released.  Otherwise, it must be held for either
- * reading or writing and will not be released.
+ * A caller using such a combination of @gup_flags must therefore hold the
+ * mmap_lock for reading only, and recognize when it's been released. Otherwise,
+ * it must be held for either reading or writing and will not be released.
  *
  * In most cases, get_user_pages or get_user_pages_fast should be used
  * instead of __get_user_pages. __get_user_pages should be used only if
@@ -1101,7 +1155,7 @@ static long __get_user_pages(struct mm_struct *mm,
 				i = follow_hugetlb_page(mm, vma, pages, vmas,
 						&start, &nr_pages, i,
 						gup_flags, locked);
-				if (locked && *locked == 0) {
+				if (!*locked) {
 					/*
 					 * We've got a VM_FAULT_RETRY
 					 * and we've lost mmap_lock.
@@ -1307,8 +1361,17 @@ static bool gup_signal_pending(unsigned int flags)
 }
 
 /*
- * Please note that this function, unlike __get_user_pages will not
- * return 0 for nr_pages > 0 without FOLL_NOWAIT
+ * Locking: (*locked == 1) means that the mmap_lock has already been acquired by
+ * the caller. This function may drop the mmap_lock. If it does so, then it will
+ * set (*locked = 0).
+ *
+ * (*locked == 0) means that the caller expects this function to acquire and
+ * drop the mmap_lock. Therefore, the value of *locked will still be zero when
+ * the function returns, even though it may have changed temporarily during
+ * function execution.
+ *
+ * Please note that this function, unlike __get_user_pages(), will not return 0
+ * for nr_pages > 0, unless FOLL_NOWAIT is used.
  */
 static __always_inline long __get_user_pages_locked(struct mm_struct *mm,
 						unsigned long start,
@@ -1319,14 +1382,20 @@ static __always_inline long __get_user_pages_locked(struct mm_struct *mm,
 						unsigned int flags)
 {
 	long ret, pages_done;
-	bool lock_dropped;
+	bool must_unlock = false;
 
-	if (locked) {
-		/* if VM_FAULT_RETRY can be returned, vmas become invalid */
-		BUG_ON(vmas);
-		/* check caller initialized locked */
-		BUG_ON(*locked != 1);
+	/*
+	 * The internal caller expects GUP to manage the lock internally and the
+	 * lock must be released when this returns.
+	 */
+	if (!*locked) {
+		if (mmap_read_lock_killable(mm))
+			return -EAGAIN;
+		must_unlock = true;
+		*locked = 1;
 	}
+	else
+		mmap_assert_locked(mm);
 
 	if (flags & FOLL_PIN)
 		mm_set_has_pinned_flag(&mm->flags);
@@ -1344,13 +1413,14 @@ static __always_inline long __get_user_pages_locked(struct mm_struct *mm,
 		flags |= FOLL_GET;
 
 	pages_done = 0;
-	lock_dropped = false;
 	for (;;) {
 		ret = __get_user_pages(mm, start, nr_pages, flags, pages,
 				       vmas, locked);
-		if (!locked)
+		if (!(flags & FOLL_UNLOCKABLE)) {
 			/* VM_FAULT_RETRY couldn't trigger, bypass */
-			return ret;
+			pages_done = ret;
+			break;
+		}
 
 		/* VM_FAULT_RETRY or VM_FAULT_COMPLETED cannot return errors */
 		if (!*locked) {
@@ -1380,7 +1450,9 @@ static __always_inline long __get_user_pages_locked(struct mm_struct *mm,
 		if (likely(pages))
 			pages += ret;
 		start += ret << PAGE_SHIFT;
-		lock_dropped = true;
+
+		/* The lock was temporarily dropped, so we must unlock later */
+		must_unlock = true;
 
 retry:
 		/*
@@ -1427,10 +1499,11 @@ retry:
 			pages++;
 		start += PAGE_SIZE;
 	}
-	if (lock_dropped && *locked) {
+	if (must_unlock && *locked) {
 		/*
-		 * We must let the caller know we temporarily dropped the lock
-		 * and so the critical section protected by it was lost.
+		 * We either temporarily dropped the lock, or the caller
+		 * requested that we both acquire and drop the lock. Either way,
+		 * we must now unlock, and notify the caller of that state.
 		 */
 		mmap_read_unlock(mm);
 		*locked = 0;
@@ -1463,6 +1536,7 @@ long populate_vma_page_range(struct vm_area_struct *vma,
 {
 	struct mm_struct *mm = vma->vm_mm;
 	unsigned long nr_pages = (end - start) / PAGE_SIZE;
+	int local_locked = 1;
 	int gup_flags;
 	long ret;
 
@@ -1495,12 +1569,15 @@ long populate_vma_page_range(struct vm_area_struct *vma,
 	if (vma_is_accessible(vma))
 		gup_flags |= FOLL_FORCE;
 
+	if (locked)
+		gup_flags |= FOLL_UNLOCKABLE;
+
 	/*
 	 * We made sure addr is within a VMA, so the following will
 	 * not result in a stack expansion that recurses back here.
 	 */
 	ret = __get_user_pages(mm, start, nr_pages, gup_flags,
-				NULL, NULL, locked);
+				NULL, NULL, locked ? locked : &local_locked);
 	lru_add_drain();
 	return ret;
 }
@@ -1521,12 +1598,7 @@ long populate_vma_page_range(struct vm_area_struct *vma,
  * code on error (see __get_user_pages()).
  *
  * vma->vm_mm->mmap_lock must be held. The range must be page-aligned and
- * covered by the VMA.
- *
- * If @locked is NULL, it may be held for read or write and will be unperturbed.
- *
- * If @locked is non-NULL, it must held for read only and may be released.  If
- * it's released, *@locked will be set to 0.
+ * covered by the VMA. If it's released, *@locked will be set to 0.
  */
 long faultin_vma_page_range(struct vm_area_struct *vma, unsigned long start,
 			    unsigned long end, bool write, int *locked)
@@ -1551,7 +1623,7 @@ long faultin_vma_page_range(struct vm_area_struct *vma, unsigned long start,
 	 *		  a poisoned page.
 	 * !FOLL_FORCE: Require proper access permissions.
 	 */
-	gup_flags = FOLL_TOUCH | FOLL_HWPOISON;
+	gup_flags = FOLL_TOUCH | FOLL_HWPOISON | FOLL_UNLOCKABLE;
 	if (write)
 		gup_flags |= FOLL_WRITE;
 
@@ -1635,8 +1707,23 @@ static long __get_user_pages_locked(struct mm_struct *mm, unsigned long start,
 		unsigned int foll_flags)
 {
 	struct vm_area_struct *vma;
+	bool must_unlock = false;
 	unsigned long vm_flags;
 	long i;
+
+	if (!nr_pages)
+		return 0;
+
+	/*
+	 * The internal caller expects GUP to manage the lock internally and the
+	 * lock must be released when this returns.
+	 */
+	if (!*locked) {
+		if (mmap_read_lock_killable(mm))
+			return -EAGAIN;
+		must_unlock = true;
+		*locked = 1;
+	}
 
 	/* calculate required read or write permissions.
 	 * If FOLL_FORCE is set, we only require the "MAY" flags.
@@ -1649,12 +1736,12 @@ static long __get_user_pages_locked(struct mm_struct *mm, unsigned long start,
 	for (i = 0; i < nr_pages; i++) {
 		vma = find_vma(mm, start);
 		if (!vma)
-			goto finish_or_fault;
+			break;
 
 		/* protect what we can, including chardevs */
 		if ((vma->vm_flags & (VM_IO | VM_PFNMAP)) ||
 		    !(vm_flags & vma->vm_flags))
-			goto finish_or_fault;
+			break;
 
 		if (pages) {
 			pages[i] = virt_to_page((void *)start);
@@ -1666,9 +1753,11 @@ static long __get_user_pages_locked(struct mm_struct *mm, unsigned long start,
 		start = (start + PAGE_SIZE) & PAGE_MASK;
 	}
 
-	return i;
+	if (must_unlock && *locked) {
+		mmap_read_unlock(mm);
+		*locked = 0;
+	}
 
-finish_or_fault:
 	return i ? : -EFAULT;
 }
 #endif /* !CONFIG_MMU */
@@ -1837,17 +1926,13 @@ EXPORT_SYMBOL(fault_in_readable);
 #ifdef CONFIG_ELF_CORE
 struct page *get_dump_page(unsigned long addr)
 {
-	struct mm_struct *mm = current->mm;
 	struct page *page;
-	int locked = 1;
+	int locked = 0;
 	int ret;
 
-	if (mmap_read_lock_killable(mm))
-		return NULL;
-	ret = __get_user_pages_locked(mm, addr, 1, &page, NULL, &locked,
+	ret = __get_user_pages_locked(current->mm, addr, 1, &page, NULL,
+				      &locked,
 				      FOLL_FORCE | FOLL_DUMP | FOLL_GET);
-	if (locked)
-		mmap_read_unlock(mm);
 	return (ret == 1) ? page : NULL;
 }
 #endif /* CONFIG_ELF_CORE */
@@ -1881,7 +1966,7 @@ static unsigned long collect_longterm_unpinnable_pages(
 			continue;
 
 		if (folio_test_hugetlb(folio)) {
-			isolate_hugetlb(&folio->page, movable_page_list);
+			isolate_hugetlb(folio, movable_page_list);
 			continue;
 		}
 
@@ -1890,7 +1975,7 @@ static unsigned long collect_longterm_unpinnable_pages(
 			drain_allow = false;
 		}
 
-		if (folio_isolate_lru(folio))
+		if (!folio_isolate_lru(folio))
 			continue;
 
 		list_add_tail(&folio->lru, movable_page_list);
@@ -2023,34 +2108,15 @@ static long __gup_longterm_locked(struct mm_struct *mm,
 				  int *locked,
 				  unsigned int gup_flags)
 {
-	bool must_unlock = false;
 	unsigned int flags;
 	long rc, nr_pinned_pages;
-
-	if (locked && WARN_ON_ONCE(!*locked))
-		return -EINVAL;
 
 	if (!(gup_flags & FOLL_LONGTERM))
 		return __get_user_pages_locked(mm, start, nr_pages, pages, vmas,
 					       locked, gup_flags);
 
-	/*
-	 * If we get to this point then FOLL_LONGTERM is set, and FOLL_LONGTERM
-	 * implies FOLL_PIN (although the reverse is not true). Therefore it is
-	 * correct to unconditionally call check_and_migrate_movable_pages()
-	 * which assumes pages have been pinned via FOLL_PIN.
-	 *
-	 * Enforce the above reasoning by asserting that FOLL_PIN is set.
-	 */
-	if (WARN_ON(!(gup_flags & FOLL_PIN)))
-		return -EINVAL;
 	flags = memalloc_pin_save();
 	do {
-		if (locked && !*locked) {
-			mmap_read_lock(mm);
-			must_unlock = true;
-			*locked = 1;
-		}
 		nr_pinned_pages = __get_user_pages_locked(mm, start, nr_pages,
 							  pages, vmas, locked,
 							  gup_flags);
@@ -2058,33 +2124,77 @@ static long __gup_longterm_locked(struct mm_struct *mm,
 			rc = nr_pinned_pages;
 			break;
 		}
+
+		/* FOLL_LONGTERM implies FOLL_PIN */
 		rc = check_and_migrate_movable_pages(nr_pinned_pages, pages);
 	} while (rc == -EAGAIN);
 	memalloc_pin_restore(flags);
-
-	if (locked && *locked && must_unlock) {
-		mmap_read_unlock(mm);
-		*locked = 0;
-	}
 	return rc ? rc : nr_pinned_pages;
 }
 
-static bool is_valid_gup_flags(unsigned int gup_flags)
+/*
+ * Check that the given flags are valid for the exported gup/pup interface, and
+ * update them with the required flags that the caller must have set.
+ */
+static bool is_valid_gup_args(struct page **pages, struct vm_area_struct **vmas,
+			      int *locked, unsigned int *gup_flags_p,
+			      unsigned int to_set)
 {
+	unsigned int gup_flags = *gup_flags_p;
+
 	/*
-	 * FOLL_PIN must only be set internally by the pin_user_pages*() APIs,
-	 * never directly by the caller, so enforce that with an assertion:
+	 * These flags not allowed to be specified externally to the gup
+	 * interfaces:
+	 * - FOLL_PIN/FOLL_TRIED/FOLL_FAST_ONLY are internal only
+	 * - FOLL_REMOTE is internal only and used on follow_page()
+	 * - FOLL_UNLOCKABLE is internal only and used if locked is !NULL
 	 */
-	if (WARN_ON_ONCE(gup_flags & FOLL_PIN))
-		return false;
-	/*
-	 * FOLL_PIN is a prerequisite to FOLL_LONGTERM. Another way of saying
-	 * that is, FOLL_LONGTERM is a specific case, more restrictive case of
-	 * FOLL_PIN.
-	 */
-	if (WARN_ON_ONCE(gup_flags & FOLL_LONGTERM))
+	if (WARN_ON_ONCE(gup_flags & (FOLL_PIN | FOLL_TRIED | FOLL_UNLOCKABLE |
+				      FOLL_REMOTE | FOLL_FAST_ONLY)))
 		return false;
 
+	gup_flags |= to_set;
+	if (locked) {
+		/* At the external interface locked must be set */
+		if (WARN_ON_ONCE(*locked != 1))
+			return false;
+
+		gup_flags |= FOLL_UNLOCKABLE;
+	}
+
+	/*
+	 * For now, always trigger NUMA hinting faults. Some GUP users like
+	 * KVM require the hint to be as the calling context of GUP is
+	 * functionally similar to a memory reference from task context.
+	 */
+	gup_flags |= FOLL_HONOR_NUMA_FAULT;
+
+	/* FOLL_GET and FOLL_PIN are mutually exclusive. */
+	if (WARN_ON_ONCE((gup_flags & (FOLL_PIN | FOLL_GET)) ==
+			 (FOLL_PIN | FOLL_GET)))
+		return false;
+
+	/* LONGTERM can only be specified when pinning */
+	if (WARN_ON_ONCE(!(gup_flags & FOLL_PIN) && (gup_flags & FOLL_LONGTERM)))
+		return false;
+
+	/* Pages input must be given if using GET/PIN */
+	if (WARN_ON_ONCE((gup_flags & (FOLL_GET | FOLL_PIN)) && !pages))
+		return false;
+
+	/* We want to allow the pgmap to be hot-unplugged at all times */
+	if (WARN_ON_ONCE((gup_flags & FOLL_LONGTERM) &&
+			 (gup_flags & FOLL_PCI_P2PDMA)))
+		return false;
+
+	/*
+	 * Can't use VMAs with locked, as locked allows GUP to unlock
+	 * which invalidates the vmas array
+	 */
+	if (WARN_ON_ONCE(vmas && (gup_flags & FOLL_UNLOCKABLE)))
+		return false;
+
+	*gup_flags_p = gup_flags;
 	return true;
 }
 
@@ -2126,7 +2236,7 @@ static bool is_valid_gup_flags(unsigned int gup_flags)
  * This does not guarantee that the page exists in the user mappings when
  * get_user_pages_remote returns, and there may even be a completely different
  * page there in some cases (eg. if mmapped pagecache has been invalidated
- * and subsequently re faulted). However it does guarantee that the page
+ * and subsequently re-faulted). However it does guarantee that the page
  * won't be freed completely. And mostly callers simply care that the page
  * contains data that was valid *at some point in time*. Typically, an IO
  * or similar operation cannot guarantee anything stronger anyway because
@@ -2154,11 +2264,15 @@ long get_user_pages_remote(struct mm_struct *mm,
 		unsigned int gup_flags, struct page **pages,
 		struct vm_area_struct **vmas, int *locked)
 {
-	if (!is_valid_gup_flags(gup_flags))
+	int local_locked = 1;
+
+	if (!is_valid_gup_args(pages, vmas, locked, &gup_flags,
+			       FOLL_TOUCH | FOLL_REMOTE))
 		return -EINVAL;
 
-	return __gup_longterm_locked(mm, start, nr_pages, pages, vmas, locked,
-				     gup_flags | FOLL_TOUCH | FOLL_REMOTE);
+	return __get_user_pages_locked(mm, start, nr_pages, pages, vmas,
+				       locked ? locked : &local_locked,
+				       gup_flags);
 }
 EXPORT_SYMBOL(get_user_pages_remote);
 
@@ -2192,11 +2306,13 @@ long get_user_pages(unsigned long start, unsigned long nr_pages,
 		unsigned int gup_flags, struct page **pages,
 		struct vm_area_struct **vmas)
 {
-	if (!is_valid_gup_flags(gup_flags))
+	int locked = 1;
+
+	if (!is_valid_gup_args(pages, vmas, NULL, &gup_flags, FOLL_TOUCH))
 		return -EINVAL;
 
-	return __gup_longterm_locked(current->mm, start, nr_pages,
-				     pages, vmas, NULL, gup_flags | FOLL_TOUCH);
+	return __get_user_pages_locked(current->mm, start, nr_pages, pages,
+				       vmas, &locked, gup_flags);
 }
 EXPORT_SYMBOL(get_user_pages);
 
@@ -2218,16 +2334,14 @@ EXPORT_SYMBOL(get_user_pages);
 long get_user_pages_unlocked(unsigned long start, unsigned long nr_pages,
 			     struct page **pages, unsigned int gup_flags)
 {
-	struct mm_struct *mm = current->mm;
-	int locked = 1;
-	long ret;
+	int locked = 0;
 
-	mmap_read_lock(mm);
-	ret = __gup_longterm_locked(mm, start, nr_pages, pages, NULL, &locked,
-				    gup_flags | FOLL_TOUCH);
-	if (locked)
-		mmap_read_unlock(mm);
-	return ret;
+	if (!is_valid_gup_args(pages, NULL, NULL, &gup_flags,
+			       FOLL_TOUCH | FOLL_UNLOCKABLE))
+		return -EINVAL;
+
+	return __get_user_pages_locked(current->mm, start, nr_pages, pages,
+				       NULL, &locked, gup_flags);
 }
 EXPORT_SYMBOL(get_user_pages_unlocked);
 
@@ -2265,6 +2379,82 @@ EXPORT_SYMBOL(get_user_pages_unlocked);
  * This code is based heavily on the PowerPC implementation by Nick Piggin.
  */
 #ifdef CONFIG_HAVE_FAST_GUP
+
+/*
+ * Used in the GUP-fast path to determine whether a pin is permitted for a
+ * specific folio.
+ *
+ * This call assumes the caller has pinned the folio, that the lowest page table
+ * level still points to this folio, and that interrupts have been disabled.
+ *
+ * Writing to pinned file-backed dirty tracked folios is inherently problematic
+ * (see comment describing the writable_file_mapping_allowed() function). We
+ * therefore try to avoid the most egregious case of a long-term mapping doing
+ * so.
+ *
+ * This function cannot be as thorough as that one as the VMA is not available
+ * in the fast path, so instead we whitelist known good cases and if in doubt,
+ * fall back to the slow path.
+ */
+static bool folio_fast_pin_allowed(struct folio *folio, unsigned int flags)
+{
+	struct address_space *mapping;
+	unsigned long mapping_flags;
+
+	/*
+	 * If we aren't pinning then no problematic write can occur. A long term
+	 * pin is the most egregious case so this is the one we disallow.
+	 */
+	if ((flags & (FOLL_PIN | FOLL_LONGTERM | FOLL_WRITE)) !=
+	    (FOLL_PIN | FOLL_LONGTERM | FOLL_WRITE))
+		return true;
+
+	/* The folio is pinned, so we can safely access folio fields. */
+
+	if (WARN_ON_ONCE(folio_test_slab(folio)))
+		return false;
+
+	/* hugetlb mappings do not require dirty-tracking. */
+	if (folio_test_hugetlb(folio))
+		return true;
+
+	/*
+	 * GUP-fast disables IRQs. When IRQS are disabled, RCU grace periods
+	 * cannot proceed, which means no actions performed under RCU can
+	 * proceed either.
+	 *
+	 * inodes and thus their mappings are freed under RCU, which means the
+	 * mapping cannot be freed beneath us and thus we can safely dereference
+	 * it.
+	 */
+	lockdep_assert_irqs_disabled();
+
+	/*
+	 * However, there may be operations which _alter_ the mapping, so ensure
+	 * we read it once and only once.
+	 */
+	mapping = READ_ONCE(folio->mapping);
+
+	/*
+	 * The mapping may have been truncated, in any case we cannot determine
+	 * if this mapping is safe - fall back to slow path to determine how to
+	 * proceed.
+	 */
+	if (!mapping)
+		return false;
+
+	/* Anonymous folios pose no problem. */
+	mapping_flags = (unsigned long)mapping & PAGE_MAPPING_FLAGS;
+	if (mapping_flags)
+		return mapping_flags & PAGE_MAPPING_ANON;
+
+	/*
+	 * At this point, we know the mapping is non-null and points to an
+	 * address_space object. The only remaining whitelisted file system is
+	 * shmem.
+	 */
+	return shmem_mapping(mapping);
+}
 
 static void __maybe_unused undo_dev_pagemap(int *nr, int nr_start,
 					    unsigned int flags,
@@ -2317,7 +2507,14 @@ static int gup_pte_range(pmd_t pmd, pmd_t *pmdp, unsigned long addr,
 		struct page *page;
 		struct folio *folio;
 
-		if (pte_protnone(pte) && !gup_can_follow_protnone(flags))
+		/*
+		 * Always fallback to ordinary GUP on PROT_NONE-mapped pages:
+		 * pte_access_permitted() better should reject these pages
+		 * either way: otherwise, GUP-fast might succeed in
+		 * cases where ordinary GUP would fail due to VMA access
+		 * permissions.
+		 */
+		if (pte_protnone(pte))
 			goto pte_unmap;
 
 		if (!pte_access_permitted(pte, flags & FOLL_WRITE))
@@ -2349,6 +2546,11 @@ static int gup_pte_range(pmd_t pmd, pmd_t *pmdp, unsigned long addr,
 
 		if (unlikely(pmd_val(pmd) != pmd_val(*pmdp)) ||
 		    unlikely(pte_val(pte) != pte_val(*ptep))) {
+			gup_put_folio(folio, 1, flags);
+			goto pte_unmap;
+		}
+
+		if (!folio_fast_pin_allowed(folio, flags)) {
 			gup_put_folio(folio, 1, flags);
 			goto pte_unmap;
 		}
@@ -2419,6 +2621,12 @@ static int __gup_device_huge(unsigned long pfn, unsigned long addr,
 			undo_dev_pagemap(nr, nr_start, flags, pages);
 			break;
 		}
+
+		if (!(flags & FOLL_PCI_P2PDMA) && is_pci_p2pdma_page(page)) {
+			undo_dev_pagemap(nr, nr_start, flags, pages);
+			break;
+		}
+
 		SetPageReferenced(page);
 		pages[*nr] = page;
 		if (unlikely(try_grab_page(page, flags))) {
@@ -2539,6 +2747,11 @@ static int gup_hugepte(pte_t *ptep, unsigned long sz, unsigned long addr,
 		return 0;
 	}
 
+	if (!folio_fast_pin_allowed(folio, flags)) {
+		gup_put_folio(folio, refs, flags);
+		return 0;
+	}
+
 	if (!pte_write(pte) && gup_must_unshare(NULL, flags, &folio->page)) {
 		gup_put_folio(folio, refs, flags);
 		return 0;
@@ -2605,6 +2818,10 @@ static int gup_huge_pmd(pmd_t orig, pmd_t *pmdp, unsigned long addr,
 		return 0;
 	}
 
+	if (!folio_fast_pin_allowed(folio, flags)) {
+		gup_put_folio(folio, refs, flags);
+		return 0;
+	}
 	if (!pmd_write(orig) && gup_must_unshare(NULL, flags, &folio->page)) {
 		gup_put_folio(folio, refs, flags);
 		return 0;
@@ -2645,6 +2862,11 @@ static int gup_huge_pud(pud_t orig, pud_t *pudp, unsigned long addr,
 		return 0;
 	}
 
+	if (!folio_fast_pin_allowed(folio, flags)) {
+		gup_put_folio(folio, refs, flags);
+		return 0;
+	}
+
 	if (!pud_write(orig) && gup_must_unshare(NULL, flags, &folio->page)) {
 		gup_put_folio(folio, refs, flags);
 		return 0;
@@ -2680,6 +2902,16 @@ static int gup_huge_pgd(pgd_t orig, pgd_t *pgdp, unsigned long addr,
 		return 0;
 	}
 
+	if (!pgd_write(orig) && gup_must_unshare(NULL, flags, &folio->page)) {
+		gup_put_folio(folio, refs, flags);
+		return 0;
+	}
+
+	if (!folio_fast_pin_allowed(folio, flags)) {
+		gup_put_folio(folio, refs, flags);
+		return 0;
+	}
+
 	*nr += refs;
 	folio_set_referenced(folio);
 	return 1;
@@ -2701,8 +2933,8 @@ static int gup_pmd_range(pud_t *pudp, pud_t pud, unsigned long addr, unsigned lo
 
 		if (unlikely(pmd_trans_huge(pmd) || pmd_huge(pmd) ||
 			     pmd_devmap(pmd))) {
-			if (pmd_protnone(pmd) &&
-			    !gup_can_follow_protnone(flags))
+			/* See gup_pte_range() */
+			if (pmd_protnone(pmd))
 				return 0;
 
 			if (!gup_huge_pmd(pmd, pmdp, addr, next, flags,
@@ -2876,11 +3108,13 @@ static int internal_get_user_pages_fast(unsigned long start,
 {
 	unsigned long len, end;
 	unsigned long nr_pinned;
+	int locked = 0;
 	int ret;
 
 	if (WARN_ON_ONCE(gup_flags & ~(FOLL_WRITE | FOLL_LONGTERM |
 				       FOLL_FORCE | FOLL_PIN | FOLL_GET |
-				       FOLL_FAST_ONLY | FOLL_NOFAULT)))
+				       FOLL_FAST_ONLY | FOLL_NOFAULT |
+				       FOLL_PCI_P2PDMA | FOLL_HONOR_NUMA_FAULT)))
 		return -EINVAL;
 
 	if (gup_flags & FOLL_PIN)
@@ -2905,8 +3139,9 @@ static int internal_get_user_pages_fast(unsigned long start,
 	/* Slow path: try to get the remaining pages with get_user_pages */
 	start += nr_pinned << PAGE_SHIFT;
 	pages += nr_pinned;
-	ret = get_user_pages_unlocked(start, nr_pages - nr_pinned, pages,
-				      gup_flags);
+	ret = __gup_longterm_locked(current->mm, start, nr_pages - nr_pinned,
+				    pages, NULL, &locked,
+				    gup_flags | FOLL_TOUCH | FOLL_UNLOCKABLE);
 	if (ret < 0) {
 		/*
 		 * The caller has to unpin the pages we already pinned so
@@ -2929,8 +3164,6 @@ static int internal_get_user_pages_fast(unsigned long start,
  *
  * Like get_user_pages_fast() except it's IRQ-safe in that it won't fall back to
  * the regular GUP.
- * Note a difference with get_user_pages_fast: this always returns the
- * number of pages pinned, 0 if no pages were pinned.
  *
  * If the architecture does not support this function, simply return with no
  * pages pinned.
@@ -2942,7 +3175,6 @@ static int internal_get_user_pages_fast(unsigned long start,
 int get_user_pages_fast_only(unsigned long start, int nr_pages,
 			     unsigned int gup_flags, struct page **pages)
 {
-	int nr_pinned;
 	/*
 	 * Internally (within mm/gup.c), gup fast variants must set FOLL_GET,
 	 * because gup fast is always a "pin with a +1 page refcount" request.
@@ -2950,21 +3182,11 @@ int get_user_pages_fast_only(unsigned long start, int nr_pages,
 	 * FOLL_FAST_ONLY is required in order to match the API description of
 	 * this routine: no fall back to regular ("slow") GUP.
 	 */
-	gup_flags |= FOLL_GET | FOLL_FAST_ONLY;
+	if (!is_valid_gup_args(pages, NULL, NULL, &gup_flags,
+			       FOLL_GET | FOLL_FAST_ONLY))
+		return -EINVAL;
 
-	nr_pinned = internal_get_user_pages_fast(start, nr_pages, gup_flags,
-						 pages);
-
-	/*
-	 * As specified in the API description above, this routine is not
-	 * allowed to return negative values. However, the common core
-	 * routine internal_get_user_pages_fast() *can* return -errno.
-	 * Therefore, correct for that here:
-	 */
-	if (nr_pinned < 0)
-		nr_pinned = 0;
-
-	return nr_pinned;
+	return internal_get_user_pages_fast(start, nr_pages, gup_flags, pages);
 }
 EXPORT_SYMBOL_GPL(get_user_pages_fast_only);
 
@@ -2987,16 +3209,14 @@ EXPORT_SYMBOL_GPL(get_user_pages_fast_only);
 int get_user_pages_fast(unsigned long start, int nr_pages,
 			unsigned int gup_flags, struct page **pages)
 {
-	if (!is_valid_gup_flags(gup_flags))
-		return -EINVAL;
-
 	/*
 	 * The caller may or may not have explicitly set FOLL_GET; either way is
 	 * OK. However, internally (within mm/gup.c), gup fast variants must set
 	 * FOLL_GET, because gup fast is always a "pin with a +1 page refcount"
 	 * request.
 	 */
-	gup_flags |= FOLL_GET;
+	if (!is_valid_gup_args(pages, NULL, NULL, &gup_flags, FOLL_GET))
+		return -EINVAL;
 	return internal_get_user_pages_fast(start, nr_pages, gup_flags, pages);
 }
 EXPORT_SYMBOL_GPL(get_user_pages_fast);
@@ -3020,56 +3240,11 @@ EXPORT_SYMBOL_GPL(get_user_pages_fast);
 int pin_user_pages_fast(unsigned long start, int nr_pages,
 			unsigned int gup_flags, struct page **pages)
 {
-	/* FOLL_GET and FOLL_PIN are mutually exclusive. */
-	if (WARN_ON_ONCE(gup_flags & FOLL_GET))
+	if (!is_valid_gup_args(pages, NULL, NULL, &gup_flags, FOLL_PIN))
 		return -EINVAL;
-
-	if (WARN_ON_ONCE(!pages))
-		return -EINVAL;
-
-	gup_flags |= FOLL_PIN;
 	return internal_get_user_pages_fast(start, nr_pages, gup_flags, pages);
 }
 EXPORT_SYMBOL_GPL(pin_user_pages_fast);
-
-/*
- * This is the FOLL_PIN equivalent of get_user_pages_fast_only(). Behavior
- * is the same, except that this one sets FOLL_PIN instead of FOLL_GET.
- *
- * The API rules are the same, too: no negative values may be returned.
- */
-int pin_user_pages_fast_only(unsigned long start, int nr_pages,
-			     unsigned int gup_flags, struct page **pages)
-{
-	int nr_pinned;
-
-	/*
-	 * FOLL_GET and FOLL_PIN are mutually exclusive. Note that the API
-	 * rules require returning 0, rather than -errno:
-	 */
-	if (WARN_ON_ONCE(gup_flags & FOLL_GET))
-		return 0;
-
-	if (WARN_ON_ONCE(!pages))
-		return 0;
-	/*
-	 * FOLL_FAST_ONLY is required in order to match the API description of
-	 * this routine: no fall back to regular ("slow") GUP.
-	 */
-	gup_flags |= (FOLL_PIN | FOLL_FAST_ONLY);
-	nr_pinned = internal_get_user_pages_fast(start, nr_pages, gup_flags,
-						 pages);
-	/*
-	 * This routine is not allowed to return negative values. However,
-	 * internal_get_user_pages_fast() *can* return -errno. Therefore,
-	 * correct for that here:
-	 */
-	if (nr_pinned < 0)
-		nr_pinned = 0;
-
-	return nr_pinned;
-}
-EXPORT_SYMBOL_GPL(pin_user_pages_fast_only);
 
 /**
  * pin_user_pages_remote() - pin pages of a remote process
@@ -3080,8 +3255,6 @@ EXPORT_SYMBOL_GPL(pin_user_pages_fast_only);
  * @gup_flags:	flags modifying lookup behaviour
  * @pages:	array that receives pointers to the pages pinned.
  *		Should be at least nr_pages long.
- * @vmas:	array of pointers to vmas corresponding to each page.
- *		Or NULL if the caller does not require them.
  * @locked:	pointer to lock flag indicating whether lock is held and
  *		subsequently whether VM_FAULT_RETRY functionality can be
  *		utilised. Lock must initially be held.
@@ -3096,18 +3269,16 @@ EXPORT_SYMBOL_GPL(pin_user_pages_fast_only);
 long pin_user_pages_remote(struct mm_struct *mm,
 			   unsigned long start, unsigned long nr_pages,
 			   unsigned int gup_flags, struct page **pages,
-			   struct vm_area_struct **vmas, int *locked)
+			   int *locked)
 {
-	/* FOLL_GET and FOLL_PIN are mutually exclusive. */
-	if (WARN_ON_ONCE(gup_flags & FOLL_GET))
-		return -EINVAL;
+	int local_locked = 1;
 
-	if (WARN_ON_ONCE(!pages))
-		return -EINVAL;
-
-	return __gup_longterm_locked(mm, start, nr_pages, pages, vmas, locked,
-				     gup_flags | FOLL_PIN | FOLL_TOUCH |
-					     FOLL_REMOTE);
+	if (!is_valid_gup_args(pages, NULL, locked, &gup_flags,
+			       FOLL_PIN | FOLL_TOUCH | FOLL_REMOTE))
+		return 0;
+	return __gup_longterm_locked(mm, start, nr_pages, pages, NULL,
+				     locked ? locked : &local_locked,
+				     gup_flags);
 }
 EXPORT_SYMBOL(pin_user_pages_remote);
 
@@ -3132,16 +3303,12 @@ long pin_user_pages(unsigned long start, unsigned long nr_pages,
 		    unsigned int gup_flags, struct page **pages,
 		    struct vm_area_struct **vmas)
 {
-	/* FOLL_GET and FOLL_PIN are mutually exclusive. */
-	if (WARN_ON_ONCE(gup_flags & FOLL_GET))
-		return -EINVAL;
+	int locked = 1;
 
-	if (WARN_ON_ONCE(!pages))
-		return -EINVAL;
-
-	gup_flags |= FOLL_PIN;
+	if (!is_valid_gup_args(pages, vmas, NULL, &gup_flags, FOLL_PIN))
+		return 0;
 	return __gup_longterm_locked(current->mm, start, nr_pages,
-				     pages, vmas, NULL, gup_flags);
+				     pages, vmas, &locked, gup_flags);
 }
 EXPORT_SYMBOL(pin_user_pages);
 
@@ -3153,14 +3320,13 @@ EXPORT_SYMBOL(pin_user_pages);
 long pin_user_pages_unlocked(unsigned long start, unsigned long nr_pages,
 			     struct page **pages, unsigned int gup_flags)
 {
-	/* FOLL_GET and FOLL_PIN are mutually exclusive. */
-	if (WARN_ON_ONCE(gup_flags & FOLL_GET))
-		return -EINVAL;
+	int locked = 0;
 
-	if (WARN_ON_ONCE(!pages))
-		return -EINVAL;
+	if (!is_valid_gup_args(pages, NULL, NULL, &gup_flags,
+			       FOLL_PIN | FOLL_TOUCH | FOLL_UNLOCKABLE))
+		return 0;
 
-	gup_flags |= FOLL_PIN;
-	return get_user_pages_unlocked(start, nr_pages, pages, gup_flags);
+	return __gup_longterm_locked(current->mm, start, nr_pages, pages, NULL,
+				     &locked, gup_flags);
 }
 EXPORT_SYMBOL(pin_user_pages_unlocked);

@@ -541,8 +541,10 @@ pgoff_t page_cache_prev_miss(struct address_space *mapping,
 #define FGP_NOFS		0x00000010
 #define FGP_NOWAIT		0x00000020
 #define FGP_FOR_MMAP		0x00000040
-#define FGP_ENTRY		0x00000080
-#define FGP_STABLE		0x00000100
+#define FGP_STABLE		0x00000080
+
+void *filemap_get_entry(struct address_space *mapping, pgoff_t index);
+#define FGP_WRITEBEGIN		(FGP_LOCK | FGP_WRITE | FGP_CREAT | FGP_STABLE)
 
 struct folio *__filemap_get_folio(struct address_space *mapping, pgoff_t index,
 		int fgp_flags, gfp_t gfp);
@@ -557,7 +559,8 @@ struct page *pagecache_get_page(struct address_space *mapping, pgoff_t index,
  * Looks up the page cache entry at @mapping & @index.  If a folio is
  * present, it is returned with an increased refcount.
  *
- * Otherwise, %NULL is returned.
+ * Return: A folio or ERR_PTR(-ENOENT) if there is no folio in the cache for
+ * this index.  Will not return a shadow, swap or DAX entry.
  */
 static inline struct folio *filemap_get_folio(struct address_space *mapping,
 					pgoff_t index)
@@ -574,8 +577,8 @@ static inline struct folio *filemap_get_folio(struct address_space *mapping,
  * present, it is returned locked with an increased refcount.
  *
  * Context: May sleep.
- * Return: A folio or %NULL if there is no folio in the cache for this
- * index.  Will not return a shadow, swap or DAX entry.
+ * Return: A folio or ERR_PTR(-ENOENT) if there is no folio in the cache for
+ * this index.  Will not return a shadow, swap or DAX entry.
  */
 static inline struct folio *filemap_lock_folio(struct address_space *mapping,
 					pgoff_t index)
@@ -592,8 +595,8 @@ static inline struct folio *filemap_lock_folio(struct address_space *mapping,
  * a new folio is created. The folio is locked, marked as accessed, and
  * returned.
  *
- * Return: A found or created folio. NULL if no folio is found and failed to
- * create a folio.
+ * Return: A found or created folio. ERR_PTR(-ENOMEM) if no folio is found
+ * and failed to create a folio.
  */
 static inline struct folio *filemap_grab_folio(struct address_space *mapping,
 					pgoff_t index)
@@ -776,6 +779,8 @@ unsigned filemap_get_folios(struct address_space *mapping, pgoff_t *start,
 		pgoff_t end, struct folio_batch *fbatch);
 unsigned filemap_get_folios_contig(struct address_space *mapping,
 		pgoff_t *start, pgoff_t end, struct folio_batch *fbatch);
+unsigned filemap_get_folios_tag(struct address_space *mapping, pgoff_t *start,
+		pgoff_t end, xa_mark_t tag, struct folio_batch *fbatch);
 unsigned find_get_pages_range_tag(struct address_space *mapping, pgoff_t *index,
 			pgoff_t end, xa_mark_t tag, unsigned int nr_pages,
 			struct page **pages);
@@ -801,6 +806,8 @@ static inline struct page *grab_cache_page(struct address_space *mapping,
 
 struct folio *read_cache_folio(struct address_space *, pgoff_t index,
 		filler_t *filler, struct file *file);
+struct folio *mapping_read_folio_gfp(struct address_space *, pgoff_t index,
+		gfp_t flags);
 struct page *read_cache_page(struct address_space *, pgoff_t index,
 		filler_t *filler, struct file *file);
 extern struct page * read_cache_page_gfp(struct address_space *mapping,
@@ -941,6 +948,18 @@ bool __folio_lock_or_retry(struct folio *folio, struct mm_struct *mm,
 void unlock_page(struct page *page);
 void folio_unlock(struct folio *folio);
 
+/**
+ * folio_trylock() - Attempt to lock a folio.
+ * @folio: The folio to attempt to lock.
+ *
+ * Sometimes it is undesirable to wait for a folio to be unlocked (eg
+ * when the locks are being taken in the wrong order, or if making
+ * progress through a batch of folios is more important than processing
+ * them in order).  Usually folio_lock() is the correct function to call.
+ *
+ * Context: Any context.
+ * Return: Whether the lock was successfully acquired.
+ */
 static inline bool folio_trylock(struct folio *folio)
 {
 	return likely(!test_and_set_bit_lock(PG_locked, folio_flags(folio, 0)));
@@ -954,6 +973,28 @@ static inline int trylock_page(struct page *page)
 	return folio_trylock(page_folio(page));
 }
 
+/**
+ * folio_lock() - Lock this folio.
+ * @folio: The folio to lock.
+ *
+ * The folio lock protects against many things, probably more than it
+ * should.  It is primarily held while a folio is being brought uptodate,
+ * either from its backing file or from swap.  It is also held while a
+ * folio is being truncated from its address_space, so holding the lock
+ * is sufficient to keep folio->mapping stable.
+ *
+ * The folio lock is also held while write() is modifying the page to
+ * provide POSIX atomicity guarantees (as long as the write does not
+ * cross a page boundary).  Other modifications to the data in the folio
+ * do not hold the folio lock and can race with writes, eg DMA and stores
+ * to mapped pages.
+ *
+ * Context: May sleep.  If you need to acquire the locks of two or
+ * more folios, they must be in order of ascending index, if they are
+ * in the same address_space.  If they are in different address_spaces,
+ * acquire the lock of the folio which belongs to the address_space which
+ * has the lowest address in memory first.
+ */
 static inline void folio_lock(struct folio *folio)
 {
 	might_sleep();
@@ -961,8 +1002,16 @@ static inline void folio_lock(struct folio *folio)
 		__folio_lock(folio);
 }
 
-/*
- * lock_page may only be called if we have the page's inode pinned.
+/**
+ * lock_page() - Lock the folio containing this page.
+ * @page: The page to lock.
+ *
+ * See folio_lock() for a description of what the lock protects.
+ * This is a legacy function and new code should probably use folio_lock()
+ * instead.
+ *
+ * Context: May sleep.  Pages in the same folio share a lock, so do not
+ * attempt to lock two pages which share a folio.
  */
 static inline void lock_page(struct page *page)
 {
@@ -974,22 +1023,22 @@ static inline void lock_page(struct page *page)
 		__folio_lock(folio);
 }
 
+/**
+ * folio_lock_killable() - Lock this folio, interruptible by a fatal signal.
+ * @folio: The folio to lock.
+ *
+ * Attempts to lock the folio, like folio_lock(), except that the sleep
+ * to acquire the lock is interruptible by a fatal signal.
+ *
+ * Context: May sleep; see folio_lock().
+ * Return: 0 if the lock was acquired; -EINTR if a fatal signal was received.
+ */
 static inline int folio_lock_killable(struct folio *folio)
 {
 	might_sleep();
 	if (!folio_trylock(folio))
 		return __folio_lock_killable(folio);
 	return 0;
-}
-
-/*
- * lock_page_killable is like lock_page but can be interrupted by fatal
- * signals.  It returns 0 if it locked the page and -EINTR if it was
- * killed while waiting.
- */
-static inline int lock_page_killable(struct page *page)
-{
-	return folio_lock_killable(page_folio(page));
 }
 
 /*
@@ -1017,8 +1066,8 @@ int folio_wait_bit_killable(struct folio *folio, int bit_nr);
  * Wait for a folio to be unlocked.
  *
  * This must be called with the caller "holding" the folio,
- * ie with increased "page->count" so that the folio won't
- * go away during the wait..
+ * ie with increased folio reference count so that the folio won't
+ * go away during the wait.
  */
 static inline void folio_wait_locked(struct folio *folio)
 {
@@ -1067,12 +1116,6 @@ static inline void folio_cancel_dirty(struct folio *folio)
 bool folio_clear_dirty_for_io(struct folio *folio);
 bool clear_page_dirty_for_io(struct page *page);
 void folio_invalidate(struct folio *folio, size_t offset, size_t length);
-int __must_check folio_write_one(struct folio *folio);
-static inline int __must_check write_one_page(struct page *page)
-{
-	return folio_write_one(page_folio(page));
-}
-
 int __set_page_dirty_nobuffers(struct page *page);
 bool noop_dirty_folio(struct address_space *mapping, struct folio *folio);
 

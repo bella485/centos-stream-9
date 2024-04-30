@@ -1877,7 +1877,7 @@ void tcp_update_recv_tstamps(struct sk_buff *skb,
 }
 
 #ifdef CONFIG_MMU
-static const struct vm_operations_struct tcp_vm_ops = {
+const struct vm_operations_struct tcp_vm_ops = {
 };
 
 int tcp_mmap(struct file *file, struct socket *sock,
@@ -1885,10 +1885,10 @@ int tcp_mmap(struct file *file, struct socket *sock,
 {
 	if (vma->vm_flags & (VM_WRITE | VM_EXEC))
 		return -EPERM;
-	vma->vm_flags &= ~(VM_MAYWRITE | VM_MAYEXEC);
+	vm_flags_clear(vma, VM_MAYWRITE | VM_MAYEXEC);
 
 	/* Instruct vm_insert_page() to not mmap_read_lock(mm) */
-	vma->vm_flags |= VM_MIXEDMAP;
+	vm_flags_set(vma, VM_MIXEDMAP);
 
 	vma->vm_ops = &tcp_vm_ops;
 	return 0;
@@ -2088,7 +2088,7 @@ static int tcp_zerocopy_vm_insert_batch_error(struct vm_area_struct *vma,
 		maybe_zap_len = total_bytes_to_map -  /* All bytes to map */
 				*length + /* Mapped or pending */
 				(pages_remaining * PAGE_SIZE); /* Failed map. */
-		zap_page_range(vma, *address, maybe_zap_len);
+		zap_page_range_single(vma, *address, maybe_zap_len, NULL);
 		err = 0;
 	}
 
@@ -2096,7 +2096,7 @@ static int tcp_zerocopy_vm_insert_batch_error(struct vm_area_struct *vma,
 		unsigned long leftover_pages = pages_remaining;
 		int bytes_mapped;
 
-		/* We called zap_page_range, try to reinsert. */
+		/* We called zap_page_range_single, try to reinsert. */
 		err = vm_insert_pages(vma, *address,
 				      pending_pages,
 				      &pages_remaining);
@@ -2177,6 +2177,34 @@ static void tcp_zc_finalize_rx_tstamp(struct sock *sk,
 	}
 }
 
+static struct vm_area_struct *find_tcp_vma(struct mm_struct *mm,
+					   unsigned long address,
+					   bool *mmap_locked)
+{
+	struct vm_area_struct *vma = NULL;
+
+#ifdef CONFIG_PER_VMA_LOCK
+	vma = lock_vma_under_rcu(mm, address);
+#endif
+	if (vma) {
+		if (!vma_is_tcp(vma)) {
+			vma_end_read(vma);
+			return NULL;
+		}
+		*mmap_locked = false;
+		return vma;
+	}
+
+	mmap_read_lock(mm);
+	vma = vma_lookup(mm, address);
+	if (!vma || !vma_is_tcp(vma)) {
+		mmap_read_unlock(mm);
+		return NULL;
+	}
+	*mmap_locked = true;
+	return vma;
+}
+
 #define TCP_ZEROCOPY_PAGE_BATCH_SIZE 32
 static int tcp_zerocopy_receive(struct sock *sk,
 				struct tcp_zerocopy_receive *zc,
@@ -2194,6 +2222,7 @@ static int tcp_zerocopy_receive(struct sock *sk,
 	u32 seq = tp->copied_seq;
 	u32 total_bytes_to_map;
 	int inq = tcp_inq(sk);
+	bool mmap_locked;
 	int ret;
 
 	zc->copybuf_len = 0;
@@ -2218,19 +2247,17 @@ static int tcp_zerocopy_receive(struct sock *sk,
 		return 0;
 	}
 
-	mmap_read_lock(current->mm);
-
-	vma = vma_lookup(current->mm, address);
-	if (!vma || vma->vm_ops != &tcp_vm_ops) {
-		mmap_read_unlock(current->mm);
+	vma = find_tcp_vma(current->mm, address, &mmap_locked);
+	if (!vma)
 		return -EINVAL;
-	}
+
 	vma_len = min_t(unsigned long, zc->length, vma->vm_end - address);
 	avail_len = min_t(u32, vma_len, inq);
 	total_bytes_to_map = avail_len & ~(PAGE_SIZE - 1);
 	if (total_bytes_to_map) {
 		if (!(zc->flags & TCP_RECEIVE_ZEROCOPY_FLAG_TLB_CLEAN_HINT))
-			zap_page_range(vma, address, total_bytes_to_map);
+			zap_page_range_single(vma, address, total_bytes_to_map,
+					      NULL);
 		zc->length = total_bytes_to_map;
 		zc->recv_skip_hint = 0;
 	} else {
@@ -2297,7 +2324,10 @@ static int tcp_zerocopy_receive(struct sock *sk,
 						   zc, total_bytes_to_map);
 	}
 out:
-	mmap_read_unlock(current->mm);
+	if (mmap_locked)
+		mmap_read_unlock(current->mm);
+	else
+		vma_end_read(vma);
 	/* Try to copy straggler data. */
 	if (!ret)
 		copylen = tcp_zc_handle_leftover(zc, sk, skb, &seq, copybuf_len, tss);
