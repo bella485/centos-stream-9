@@ -225,22 +225,35 @@ static void gen8_ggtt_invalidate(struct i915_ggtt *ggtt)
 				      GFX_FLSH_CNTL_EN);
 }
 
+static void guc_ggtt_ct_invalidate(struct intel_gt *gt)
+{
+	struct intel_uncore *uncore = gt->uncore;
+	intel_wakeref_t wakeref;
+
+	with_intel_runtime_pm_if_active(uncore->rpm, wakeref) {
+		struct intel_guc *guc = &gt->uc.guc;
+
+		intel_guc_invalidate_tlb_guc(guc);
+	}
+}
+
 static void guc_ggtt_invalidate(struct i915_ggtt *ggtt)
 {
 	struct drm_i915_private *i915 = ggtt->vm.i915;
+	struct intel_gt *gt;
 
 	gen8_ggtt_invalidate(ggtt);
 
-	if (GRAPHICS_VER(i915) >= 12) {
-		struct intel_gt *gt;
-
-		list_for_each_entry(gt, &ggtt->gt_list, ggtt_link)
+	list_for_each_entry(gt, &ggtt->gt_list, ggtt_link) {
+		if (intel_guc_tlb_invalidation_is_available(&gt->uc.guc))
+			guc_ggtt_ct_invalidate(gt);
+		else if (GRAPHICS_VER(i915) >= 12)
 			intel_uncore_write_fw(gt->uncore,
 					      GEN12_GUC_TLB_INV_CR,
 					      GEN12_GUC_TLB_INV_CR_INVALIDATE);
-	} else {
-		intel_uncore_write_fw(ggtt->vm.gt->uncore,
-				      GEN8_GTCR, GEN8_GTCR_INVALIDATE);
+		else
+			intel_uncore_write_fw(gt->uncore,
+					      GEN8_GTCR, GEN8_GTCR_INVALIDATE);
 	}
 }
 
@@ -283,7 +296,7 @@ static bool should_update_ggtt_with_bind(struct i915_ggtt *ggtt)
 	return intel_gt_is_bind_context_ready(gt);
 }
 
-static struct intel_context *gen8_ggtt_bind_get_ce(struct i915_ggtt *ggtt)
+static struct intel_context *gen8_ggtt_bind_get_ce(struct i915_ggtt *ggtt, intel_wakeref_t *wakeref)
 {
 	struct intel_context *ce;
 	struct intel_gt *gt = ggtt->vm.gt;
@@ -300,7 +313,8 @@ static struct intel_context *gen8_ggtt_bind_get_ce(struct i915_ggtt *ggtt)
 	 * would conflict with fs_reclaim trying to allocate memory while
 	 * doing rpm_resume().
 	 */
-	if (!intel_gt_pm_get_if_awake(gt))
+	*wakeref = intel_gt_pm_get_if_awake(gt);
+	if (!*wakeref)
 		return NULL;
 
 	intel_engine_pm_get(ce->engine);
@@ -308,10 +322,10 @@ static struct intel_context *gen8_ggtt_bind_get_ce(struct i915_ggtt *ggtt)
 	return ce;
 }
 
-static void gen8_ggtt_bind_put_ce(struct intel_context *ce)
+static void gen8_ggtt_bind_put_ce(struct intel_context *ce, intel_wakeref_t wakeref)
 {
 	intel_engine_pm_put(ce->engine);
-	intel_gt_pm_put(ce->engine->gt);
+	intel_gt_pm_put(ce->engine->gt, wakeref);
 }
 
 static bool gen8_ggtt_bind_ptes(struct i915_ggtt *ggtt, u32 offset,
@@ -324,12 +338,13 @@ static bool gen8_ggtt_bind_ptes(struct i915_ggtt *ggtt, u32 offset,
 	struct sgt_iter iter;
 	struct i915_request *rq;
 	struct intel_context *ce;
+	intel_wakeref_t wakeref;
 	u32 *cs;
 
 	if (!num_entries)
 		return true;
 
-	ce = gen8_ggtt_bind_get_ce(ggtt);
+	ce = gen8_ggtt_bind_get_ce(ggtt, &wakeref);
 	if (!ce)
 		return false;
 
@@ -405,13 +420,13 @@ queue_err_rq:
 		offset += n_ptes;
 	}
 
-	gen8_ggtt_bind_put_ce(ce);
+	gen8_ggtt_bind_put_ce(ce, wakeref);
 	return true;
 
 err_rq:
 	i915_request_put(rq);
 put_ce:
-	gen8_ggtt_bind_put_ce(ce);
+	gen8_ggtt_bind_put_ce(ce, wakeref);
 	return false;
 }
 
@@ -1256,7 +1271,7 @@ static int gen8_gmch_probe(struct i915_ggtt *ggtt)
 		ggtt->vm.raw_insert_page = gen8_ggtt_insert_page;
 	}
 
-	if (intel_uc_wants_guc(&ggtt->vm.gt->uc))
+	if (intel_uc_wants_guc_submission(&ggtt->vm.gt->uc))
 		ggtt->invalidate = guc_ggtt_invalidate;
 	else
 		ggtt->invalidate = gen8_ggtt_invalidate;
