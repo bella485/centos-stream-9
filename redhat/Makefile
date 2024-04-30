@@ -321,6 +321,10 @@ endif
 
 include Makefile.cross
 
+ifeq ("$(ENABLE_WERROR)", "1")
+  BUILDOPTS += +werror
+endif
+
 #
 # Targets
 #

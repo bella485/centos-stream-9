@@ -271,6 +271,9 @@ Summary: The Linux kernel
 # Want to build a vanilla kernel build without any non-upstream patches?
 %define with_vanilla %{?_with_vanilla: 1} %{?!_with_vanilla: 0}
 
+# Force warning being treated as error
+%define with_werror %{?_with_werror: 1} %{?!_with_werror: 0}
+
 %if 0%{?fedora}
 # Kernel headers are being split out into a separate package
 %define with_headers 0
@@ -1794,6 +1797,12 @@ done
 for i in *.config; do
   sed -i 's/CONFIG_CRYPTO_FIPS_NAME=.*/CONFIG_CRYPTO_FIPS_NAME="Red Hat Enterprise Linux %{rhel} - Kernel Cryptographic API"/' $i
 done
+%endif
+
+%if %{with_werror}
+  if [ "$(gcc -dumpfullversion | cut -d. -f1)" = "11" ]; then
+    sed -i "s/# CONFIG_WERROR is not set/CONFIG_WERROR=y/" "$i"
+  fi
 %endif
 
 cp %{SOURCE81} .
