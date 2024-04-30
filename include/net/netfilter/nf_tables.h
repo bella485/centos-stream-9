@@ -106,6 +106,8 @@ struct nft_data {
 	};
 } __attribute__((aligned(__alignof__(u64))));
 
+#define NFT_REG32_NUM		20
+
 /**
  *	struct nft_regs - nf_tables register set
  *
@@ -116,7 +118,7 @@ struct nft_data {
  */
 struct nft_regs {
 	union {
-		u32			data[20];
+		u32			data[NFT_REG32_NUM];
 		struct nft_verdict	verdict;
 	};
 };
@@ -980,6 +982,32 @@ static inline void nft_set_elem_update_expr(const struct nft_set_ext *ext,
 
 #define NFT_CHAIN_POLICY_UNSET		U8_MAX
 
+struct nft_rule_dp {
+	u64				is_last:1,
+					dlen:12,
+					handle:42;	/* for tracing */
+	unsigned char			data[]
+		__attribute__((aligned(__alignof__(struct nft_expr))));
+};
+
+struct nft_rule_dp_last {
+	struct nft_rule_dp end;		/* end of nft_rule_blob marker */
+	struct rcu_head h;		/* call_rcu head */
+	struct nft_rule_blob *blob;	/* ptr to free via call_rcu */
+	const struct nft_chain *chain;	/* for nftables tracing */
+};
+
+static inline const struct nft_rule_dp *nft_rule_next(const struct nft_rule_dp *rule)
+{
+	return (void *)rule + sizeof(*rule) + rule->dlen;
+}
+
+struct nft_rule_blob {
+	unsigned long			size;
+	unsigned char			data[]
+		__attribute__((aligned(__alignof__(struct nft_rule_dp))));
+};
+
 /**
  *	struct nft_chain - nf_tables chain
  *
@@ -993,8 +1021,8 @@ static inline void nft_set_elem_update_expr(const struct nft_set_ext *ext,
  *	@name: name of the chain
  */
 struct nft_chain {
-	struct nft_rule			*__rcu *rules_gen_0;
-	struct nft_rule			*__rcu *rules_gen_1;
+	struct nft_rule_blob		__rcu *blob_gen_0;
+	struct nft_rule_blob		__rcu *blob_gen_1;
 	struct list_head		rules;
 	struct list_head		list;
 	struct rhlist_head		rhlhead;
@@ -1009,7 +1037,7 @@ struct nft_chain {
 	u8				*udata;
 
 	/* Only used during control plane commit phase: */
-	struct nft_rule			**rules_next;
+	struct nft_rule_blob		*blob_next;
 };
 
 int nft_chain_validate(const struct nft_ctx *ctx, const struct nft_chain *chain);
@@ -1353,11 +1381,7 @@ void nft_unregister_flowtable_type(struct nf_flowtable_type *type);
  *	@type: event type (enum nft_trace_types)
  *	@skbid: hash of skb to be used as trace id
  *	@packet_dumped: packet headers sent in a previous traceinfo message
- *	@pkt: pktinfo currently processed
  *	@basechain: base chain currently processed
- *	@chain: chain currently processed
- *	@rule:  rule that was evaluated
- *	@verdict: verdict given by rule
  */
 struct nft_traceinfo {
 	bool				trace;
@@ -1365,18 +1389,16 @@ struct nft_traceinfo {
 	bool				packet_dumped;
 	enum nft_trace_types		type:8;
 	u32				skbid;
-	const struct nft_pktinfo	*pkt;
 	const struct nft_base_chain	*basechain;
-	const struct nft_chain		*chain;
-	const struct nft_rule		*rule;
-	const struct nft_verdict	*verdict;
 };
 
 void nft_trace_init(struct nft_traceinfo *info, const struct nft_pktinfo *pkt,
-		    const struct nft_verdict *verdict,
 		    const struct nft_chain *basechain);
 
-void nft_trace_notify(struct nft_traceinfo *info);
+void nft_trace_notify(const struct nft_pktinfo *pkt,
+		      const struct nft_verdict *verdict,
+		      const struct nft_rule_dp *rule,
+		      struct nft_traceinfo *info);
 
 #define MODULE_ALIAS_NFT_CHAIN(family, name) \
 	MODULE_ALIAS("nft-chain-" __stringify(family) "-" name)
