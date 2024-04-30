@@ -348,12 +348,11 @@ static int gmap_alloc_table(struct gmap *gmap, unsigned long *table,
 static unsigned long __gmap_segment_gaddr(unsigned long *entry)
 {
 	struct page *page;
-	unsigned long offset, mask;
+	unsigned long offset;
 
 	offset = (unsigned long) entry / sizeof(unsigned long);
 	offset = (offset & (PTRS_PER_PMD - 1)) * PMD_SIZE;
-	mask = ~(PTRS_PER_PMD * sizeof(pmd_t) - 1);
-	page = virt_to_page((void *)((unsigned long) entry & mask));
+	page = pmd_pgtable_page((pmd_t *) entry);
 	return page->index + offset;
 }
 
@@ -1297,7 +1296,7 @@ static int gmap_protect_rmap(struct gmap *sg, unsigned long raddr,
 static inline void gmap_idte_one(unsigned long asce, unsigned long vaddr)
 {
 	asm volatile(
-		"	.insn	rrf,0xb98e0000,%0,%1,0,0"
+		"	idte	%0,0,%1"
 		: : "a" (asce), "a" (vaddr) : "cc", "memory");
 }
 
