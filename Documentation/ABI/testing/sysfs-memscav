@@ -1,0 +1,49 @@
+What:		/sys/kernel/memscav
+Date:		October 2023
+KernelVersion:	RHEL-only
+Description:
+		Interface to control memory scavenging options. Memory past the
+		limited amount instructed to the kernel can be recovered using
+		the platform description.
+		This is similar to what CONFIG_ARCH_MEMORY_PROBE allows, with
+		some additional simple checks.
+		(see Documentation/admin-guide/mm/memory-hotplug.rst)
+
+What:		/sys/kernel/memscav/probe
+Date:		October 2023
+KernelVersion:	RHEL-only
+Description:
+		Write-only. Similar to /sys/devices/system/memory/probe.
+		Does not perform any sanity check, it is therefore possible to
+		create a virtual mapping to memory that does not exist. For
+		debug and experimentation only.
+		(see Documentation/admin-guide/mm/memory-hotplug.rst)
+
+What:		/sys/kernel/memscav/ranges
+Date:		October 2023
+KernelVersion:	RHEL-only
+Description:
+		Read-only. Reports the known physical ranges for RAM as reported by the
+		platform (device-tree or UEFI memory map) to the kernel.
+
+What:		/sys/kernel/memscav/scavenge
+Date:		October 2023
+KernelVersion:	RHEL-only
+Description:
+		Write-only. Takes an amount of bytes and tries to recover
+		physical memory reported during boot but excluded by the kernel
+		(for example, by the parameter "mem=X").
+		Fails with EINVAL if the amount given is not a multiple of
+		/sys/devices/system/memory/block_size_bytes.
+		This will scavenge as much memory as possible, but there is no
+		guaranty that the total amount will be scavenged.
+		/sys/kernel/memscav/hidden_blocks will show if any memory block is
+		still hidden.
+
+What:		/sys/kernel/memscav/hidden_blocks
+Date:		October 2023
+KernelVersion:	RHEL-only
+Description:
+		Read-only. Reports blocks of physical addresses currently hidden from the system.
+		When using /sys/kernel/memscav/scavenge, the recovered memory will be
+		taken per block-size from these ranges.
